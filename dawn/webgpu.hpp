@@ -1703,7 +1703,7 @@ HANDLE(Adapter)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<RequestDeviceStatus>(status), device, message);
 		};
-		RequestDeviceCallbackCallbackInfo callbackInfo = {
+		WGPURequestDeviceCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1736,7 +1736,6 @@ HANDLE(Buffer)
 	BufferMapState getMapState() const;
 	uint64_t getSize() const;
 	BufferUsage getUsage() const;
-
 	template<typename Lambda>
 	Future mapAsync(MapMode mode, size_t offset, size_t size, CallbackMode callbackMode, const Lambda& callback) const {
 		auto* lambda = new Lambda(callback);
@@ -1744,7 +1743,7 @@ HANDLE(Buffer)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<MapAsyncStatus>(status), message);
 		};
-		BufferMapCallbackCallbackInfo callbackInfo = {
+		WGPUBufferMapCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1753,7 +1752,6 @@ HANDLE(Buffer)
 		};
 		return wgpuBufferMapAsync(m_raw, static_cast<WGPUMapMode>(mode), offset, size, callbackInfo);
 	}
-	
 	Status readMappedRange(size_t offset, void * data, size_t size) const;
 	void setLabel(StringView label) const;
 	void unmap() const;
@@ -1830,7 +1828,7 @@ HANDLE(Device)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<CreatePipelineAsyncStatus>(status), pipeline, message);
 		};
-		CreateComputePipelineAsyncCallbackCallbackInfo callbackInfo = {
+		WGPUCreateComputePipelineAsyncCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1855,7 +1853,7 @@ HANDLE(Device)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<CreatePipelineAsyncStatus>(status), pipeline, message);
 		};
-		CreateRenderPipelineAsyncCallbackCallbackInfo callbackInfo = {
+		WGPUCreateRenderPipelineAsyncCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1888,7 +1886,7 @@ HANDLE(Device)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<PopErrorScopeStatus>(status), static_cast<ErrorType>(type), message);
 		};
-		PopErrorScopeCallbackCallbackInfo callbackInfo = {
+		WGPUPopErrorScopeCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1906,7 +1904,7 @@ HANDLE(Device)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<LoggingType>(type), message);
 		};
-		LoggingCallbackCallbackInfo callbackInfo = {
+		WGPULoggingCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1942,7 +1940,7 @@ HANDLE(Instance)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<RequestAdapterStatus>(status), adapter, message);
 		};
-		RequestAdapterCallbackCallbackInfo callbackInfo = {
+		WGPURequestAdapterCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -1982,7 +1980,7 @@ HANDLE(Queue)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<QueueWorkDoneStatus>(status));
 		};
-		QueueWorkDoneCallbackCallbackInfo callbackInfo = {
+		WGPUQueueWorkDoneCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -2084,7 +2082,7 @@ HANDLE(ShaderModule)
 			std::unique_ptr<Lambda> lambda(reinterpret_cast<Lambda*>(userdata1));
 			(*lambda)(static_cast<CompilationInfoRequestStatus>(status), *reinterpret_cast<CompilationInfo const *>(compilationInfo));
 		};
-		CompilationInfoCallbackCallbackInfo callbackInfo = {
+		WGPUCompilationInfoCallbackInfo callbackInfo = {
 			/* nextInChain = */ nullptr,
 			/* mode = */ callbackMode,
 			/* callback = */ cCallback,
@@ -4255,7 +4253,7 @@ Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
 		context.requestEnded = true;
 	};
 	callbackInfo.mode = CallbackMode::AllowSpontaneous;
-	requestAdapter(options, callbackInfo);
+	wgpuInstanceRequestAdapter(*this, &options, callbackInfo);
 
 #if __EMSCRIPTEN__
 	while (!context.requestEnded) {
@@ -4294,7 +4292,7 @@ Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 		context.requestEnded = true;
 	};
 	callbackInfo.mode = CallbackMode::AllowSpontaneous;
-	requestDevice(descriptor, callbackInfo);
+	wgpuAdapterRequestDevice(*this, &descriptor, callbackInfo);
 
 #if __EMSCRIPTEN__
 	while (!context.requestEnded) {
