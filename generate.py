@@ -552,7 +552,7 @@ def produceBinding(args, api, meta):
 
         # Auto-generate setDefault
         if entry_type == 'CLASS':
-            decls.append(f"\t{maybe_inline}void setDefault();\n")
+            decls.append(f"\t{maybe_inline}{entry_name}& setDefault();\n")
 
             cls_api = handle_or_class
             prop_names = [f"{p.name}" for p in cls_api.properties]
@@ -573,8 +573,9 @@ def produceBinding(args, api, meta):
                 else:
                     logging.warning(f"Type {entry_name} starts with a 'chain' field but has no apparent associated SType.")
             implems.append(
-                f"{maybe_inline}void {entry_name}::setDefault() " + "{\n"
+                f"{maybe_inline}{entry_name}& {entry_name}::setDefault() " + "{\n"
                 + "".join(prop_defaults)
+                + "\treturn *this;\n"
                 + "}\n"
             )
 
