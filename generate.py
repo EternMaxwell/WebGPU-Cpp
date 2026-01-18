@@ -627,9 +627,10 @@ def produceBinding(args, api, meta):
                     
                     # 2. Vector
                     vec_type = f"std::vector<{cpp_base_type}>"
-                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {vec_type}& {prop.name});\n")
+                    vec_arg = f"const {vec_type}&" if is_const else f"{vec_type}&"
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({vec_arg} {prop.name});\n")
                     implems.append(
-                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {vec_type}& {prop.name}) {{\n"
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({vec_arg} {prop.name}) {{\n"
                         f"\tthis->{prop.counter} = static_cast<uint32_t>({prop.name}.size());\n"
                         f"\tthis->{prop.name} = reinterpret_cast<{c_type}>({prop.name}.data());\n"
                         f"\treturn *this;\n"
@@ -637,7 +638,8 @@ def produceBinding(args, api, meta):
                     )
 
                     # 3. Span
-                    span_type = f"std::span<const {cpp_base_type}>"
+                    span_t = f"const {cpp_base_type}" if is_const else cpp_base_type
+                    span_type = f"std::span<{span_t}>"
                     decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
                     implems.append(
                         f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
