@@ -40,6 +40,7 @@ module;
 #include <cmath>
 #include <memory>
 #include <string_view>
+#include <span>
 
 #if __EMSCRIPTEN__
 #include <emscripten.h>

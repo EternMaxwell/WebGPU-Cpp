@@ -578,6 +578,84 @@ def produceBinding(args, api, meta):
                 + "}\n"
             )
 
+            for prop in cls_api.properties:
+                if prop.name == "chain": continue
+
+                c_type = prop.type
+                is_ptr = "*" in c_type
+                is_const = "const" in c_type
+                
+                base_type = c_type.replace("const", "").replace("*", "").replace("WGPU_NULLABLE", "").strip()
+                
+                cpp_base_type = base_type
+                if base_type.startswith("WGPU"):
+                    candidate = base_type[4:]
+                    if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
+                        cpp_base_type = candidate
+                elif base_type == "WGPUBool":
+                    cpp_base_type = "bool"
+
+                cpp_type = cpp_base_type
+                if is_const: cpp_type = "const " + cpp_type
+                if is_ptr: cpp_type = cpp_type + " *"
+
+                setter_name = "set" + prop.name[0].upper() + prop.name[1:]
+                
+                arg_name = prop.name
+                
+                trans_expr = arg_name
+                if cpp_base_type != base_type:
+                    if cpp_base_type == "bool" and base_type == "WGPUBool":
+                         trans_expr = f"static_cast<WGPUBool>({arg_name} ? 1 : 0)"
+                    elif is_ptr:
+                        trans_expr = f"reinterpret_cast<{c_type}>({arg_name})"
+                    elif cpp_base_type in enum_names:
+                        trans_expr = f"static_cast<{base_type}>({arg_name})"
+                
+                if prop.counter:
+                    # Array Setter
+                    # 1. Pointer + Count
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(uint32_t {prop.counter}, {cpp_type} {prop.name});\n")
+                    implems.append(
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(uint32_t {prop.counter}, {cpp_type} {prop.name}) {{\n"
+                        f"\tthis->{prop.counter} = {prop.counter};\n"
+                        f"\tthis->{prop.name} = {trans_expr};\n"
+                        f"\treturn *this;\n"
+                        f"}}\n"
+                    )
+                    
+                    # 2. Vector
+                    vec_type = f"std::vector<{cpp_base_type}>"
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {vec_type}& {prop.name});\n")
+                    implems.append(
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {vec_type}& {prop.name}) {{\n"
+                        f"\tthis->{prop.counter} = static_cast<uint32_t>({prop.name}.size());\n"
+                        f"\tthis->{prop.name} = reinterpret_cast<{c_type}>({prop.name}.data());\n"
+                        f"\treturn *this;\n"
+                        f"}}\n"
+                    )
+
+                    # 3. Span
+                    span_type = f"std::span<const {cpp_base_type}>"
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
+                    implems.append(
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
+                        f"\tthis->{prop.counter} = static_cast<uint32_t>({prop.name}.size());\n"
+                        f"\tthis->{prop.name} = reinterpret_cast<{c_type}>({prop.name}.data());\n"
+                        f"\treturn *this;\n"
+                        f"}}\n"
+                    )
+                
+                else:
+                    # Generic Setter
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({cpp_type} {prop.name});\n")
+                    implems.append(
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({cpp_type} {prop.name}) {{\n"
+                        f"\tthis->{prop.name} = {trans_expr};\n"
+                        f"\treturn *this;\n"
+                        f"}}\n"
+                    )
+
         for proc in api.procedures:
             if proc.parent != entry_name:
                 continue
