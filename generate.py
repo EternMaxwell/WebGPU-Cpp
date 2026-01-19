@@ -449,6 +449,7 @@ def produceBinding(args, api, meta):
         "webgpu_includes": [],
         "descriptors": [],
         "structs": [],
+        "defaults_impl": [],
         "class_impl": [],
         "class_oneliner": [],
         "handles_decl": [],
@@ -549,6 +550,7 @@ def produceBinding(args, api, meta):
         
         decls = []
         implems = []
+        defaults_implems = []
 
         # Auto-generate setDefault
         if entry_type == 'CLASS':
@@ -572,7 +574,7 @@ def produceBinding(args, api, meta):
                     ])
                 else:
                     logging.warning(f"Type {entry_name} starts with a 'chain' field but has no apparent associated SType.")
-            implems.append(
+            defaults_implems.append(
                 f"{maybe_inline}{entry_name}& {entry_name}::setDefault() " + "{\n"
                 + "".join(prop_defaults)
                 + "\treturn *this;\n"
@@ -777,6 +779,10 @@ def produceBinding(args, api, meta):
                                 [f"static_cast<{a.type}>({vec_name}.size())", f"{vec_name}.data()"]
                             ),
                             (
+                                [f"const std::span<const {vec_type}>& {vec_name}"],
+                                [f"static_cast<{a.type}>({vec_name}.size())", f"{vec_name}.data()"]
+                            ),
+                            (
                                 [f"const {vec_type}& {vec_name}"],
                                 [f"1", f"&{vec_name}"]
                             ),
@@ -833,6 +839,13 @@ def produceBinding(args, api, meta):
             f"{macro}({entry_name});"
         )
 
+        if len(defaults_implems) > 0:
+            binding["defaults_impl"].append(
+                f"// Defaults of {entry_name}\n"
+                + "".join(defaults_implems)
+                + "\n"
+            )
+
         binding[namespace_impl].append(
             f"// Methods of {entry_name}\n"
             + "".join(implems)
@@ -841,6 +854,7 @@ def produceBinding(args, api, meta):
 
     # Only handles_impl is present in the tamplate
     binding["handles_impl"] = (
+        binding["defaults_impl"] +
         binding["class_impl"] +
         binding["handles_impl"]
     )
