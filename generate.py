@@ -773,18 +773,26 @@ def produceBinding(args, api, meta):
                         vec_type = b.type[:-8]
                         vec_name = name if name.endswith("s") else name + "s"
 
+                        cpp_type = vec_type
+                        if cpp_type.startswith("struct "):
+                            cpp_type = cpp_type[7:]
+                        if cpp_type.startswith("WGPU"):
+                            candidate = cpp_type[4:]
+                            if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
+                                cpp_type = candidate
+
                         alternatives = [
                             (
-                                [f"const std::vector<{vec_type}>& {vec_name}"],
-                                [f"static_cast<{a.type}>({vec_name}.size())", f"{vec_name}.data()"]
+                                [f"const std::vector<{cpp_type}>& {vec_name}"],
+                                [f"static_cast<{a.type}>({vec_name}.size())", f"reinterpret_cast<const {vec_type} *>({vec_name}.data())"]
                             ),
                             (
-                                [f"const std::span<const {vec_type}>& {vec_name}"],
-                                [f"static_cast<{a.type}>({vec_name}.size())", f"{vec_name}.data()"]
+                                [f"const std::span<const {cpp_type}>& {vec_name}"],
+                                [f"static_cast<{a.type}>({vec_name}.size())", f"reinterpret_cast<const {vec_type} *>({vec_name}.data())"]
                             ),
                             (
-                                [f"const {vec_type}& {vec_name}"],
-                                [f"1", f"&{vec_name}"]
+                                [f"const {cpp_type}& {vec_name}"],
+                                [f"1", f"reinterpret_cast<const {vec_type} *>(&{vec_name})"]
                             ),
                         ]
 
