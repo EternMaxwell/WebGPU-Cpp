@@ -219,6 +219,7 @@ class EnumerationEntryApi:
 class EnumerationApi:
     name: str
     entries: list[EnumerationEntryApi] = field(default_factory=list)
+    is_real_enum: bool = False
 
 @dataclass
 class CallbackApi:
@@ -368,7 +369,7 @@ def parseEnum(name, it, stypes):
     entry_re = re.compile(r"^\s+WGPU([^_]+)_([\w_]+) = ([^,]+),?")
     end_re = re.compile(".*}")
 
-    api = EnumerationApi(name=name)
+    api = EnumerationApi(name=name, is_real_enum=True)
 
     while (x := next(it, None)) is not None:
         if (match := entry_re.search(x)):
@@ -472,6 +473,25 @@ def produceBinding(args, api, meta):
     for url in args.header_url:
         filename = os.path.split(url)[1]
         binding["webgpu_includes"].append(f"#include <webgpu/{filename}>")
+
+    # Prepare macro injection for fake enums (static const) to allow re-exporting them
+    fake_enum_values = []
+    for e in api.enumerations:
+        if not e.is_real_enum:
+            for entry in e.entries:
+                fake_enum_values.append(entry.value)
+    
+    defines_block = []
+    undefs_block = []
+    for val in fake_enum_values:
+        defines_block.append(f"#define {val} {val}_Internal")
+        undefs_block.append(f"#undef {val}")
+
+    binding["webgpu_includes"] = (
+        defines_block + 
+        binding["webgpu_includes"] + 
+        undefs_block
+    )
 
     # Cached variables for format_arg
     handle_names = [ h.name for h in api.handles ]
@@ -1043,10 +1063,16 @@ def produceBinding(args, api, meta):
     for e in api.enumerations:
         binding["c_exports"].append(f"export using ::WGPU{e.name};")
         for entry in e.entries:
-             binding["c_exports"].append(f"export using ::{entry.value};")
+            if e.is_real_enum:
+                binding["c_exports"].append(f"export using ::{entry.value};")
+            else:
+                binding["c_exports"].append(f"export constexpr auto {entry.value} = ::{entry.value}_Internal;")
 
     for p in api.procedures:
-        binding["c_exports"].append(f"export using ::wgpu{p.name};")
+        name = p.name
+        if p.parent is not None:
+            name = p.parent + name
+        binding["c_exports"].append(f"export using ::wgpu{name};")
 
     for cb in api.callbacks:
         binding["c_exports"].append(f"export using ::WGPU{cb.name}Callback;")
