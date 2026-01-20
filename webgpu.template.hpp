@@ -102,7 +102,7 @@ struct Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type() { reinterpret_cast<W&>(*this) = {}; nextInChain = nullptr; } \
+	Type() { setDefault(); nextInChain = nullptr; } \
 	Type(const W &other) { reinterpret_cast<W&>(*this) = other; nextInChain = nullptr; } \
 	Type(const DefaultFlag &) { setDefault(); } \
 	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
@@ -118,7 +118,7 @@ struct Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type() { reinterpret_cast<W&>(*this) = {}; } \
+	Type() { setDefault(); } \
 	Type(const W &other) { reinterpret_cast<W&>(*this) = other; } \
 	Type(const DefaultFlag &) { setDefault(); } \
 	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
