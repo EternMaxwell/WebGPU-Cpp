@@ -515,19 +515,18 @@ def produceBinding(args, api, meta):
             # Determine C++ signature type: default to pointers to avoid nullability issues and simplify casting
             cpp_sig = cpp_base
             if is_const: cpp_sig = "const " + cpp_sig
-            if is_ptr: cpp_sig += " *"
+            if is_ptr: cpp_sig += "&"
             
             c_cast = c_base
             if is_const: c_cast = "const " + c_cast
             
             if is_ptr:
-                 # Pointer argument: Value passed TO the C function. Needs reinterpret_cast
                  cast_type_ptr = c_cast + " *"
-                 arg_c = f"reinterpret_cast<{cast_type_ptr}>({arg.name})"
+                 arg_c = f"reinterpret_cast<{cast_type_ptr}>(&{arg.name})"
                  
                  # arg_cpp callback conversion
-                 cpp_sig_ptr = cpp_sig
-                 arg_cpp = f"reinterpret_cast<{cpp_sig_ptr}>({arg.name})"
+                 cpp_sig_ptr = cpp_sig[:-1] + "*"
+                 arg_cpp = f"*reinterpret_cast<{cpp_sig_ptr}>({arg.name})"
             else:
                  # Value argument (e.g. StringView): Cast address and dereference
                  cast_type_ptr = c_cast + " *"
