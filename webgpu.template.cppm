@@ -78,10 +78,35 @@ constexpr DefaultFlag Default;
 #define HANDLE(Type) \
 class Type { \
 public: \
-	typedef Type S; /* S == Self */ \
-	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type() : m_raw(nullptr) {} \
-	Type(const W& w) : m_raw(w) {} \
+	typedef Type S; \
+	typedef WGPU ## Type W; \
+	constexpr Type() : m_raw(nullptr) {} \
+	constexpr Type(const W& w) : m_raw(w) {} \
+	Type(const Type& other) : m_raw(other.m_raw) { \
+		if (m_raw) wgpu ## Type ## AddRef(m_raw); \
+	} \
+	Type(Type&& other) noexcept : m_raw(other.m_raw) { \
+		other.m_raw = nullptr; \
+	} \
+	Type& operator=(const Type& other) { \
+		if (this != &other) { \
+			if (m_raw) wgpu ## Type ## Release(m_raw); \
+			m_raw = other.m_raw; \
+			if (m_raw) wgpu ## Type ## AddRef(m_raw); \
+		} \
+		return *this; \
+	} \
+	Type& operator=(Type&& other) noexcept { \
+		if (this != &other) { \
+			if (m_raw) wgpu ## Type ## Release(m_raw); \
+			m_raw = other.m_raw; \
+			other.m_raw = nullptr; \
+		} \
+		return *this; \
+	} \
+	~Type() { \
+		if (m_raw) wgpu ## Type ## Release(m_raw); \
+	} \
 	operator W&() { return m_raw; } \
 	operator const W&() const { return m_raw; } \
 	operator bool() const { return m_raw != nullptr; } \
