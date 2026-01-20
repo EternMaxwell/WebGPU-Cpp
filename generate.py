@@ -401,10 +401,9 @@ def parseClass(name, it):
                 api.is_descriptor = True
             if prop.name == "chain" and api.parent is not None:
                 pass
-            elif prop.name[-5:] == "Count":
+            if prop.name[-5:] == "Count":
                 count_properties.append(prop)
-            else:
-                api.properties.append(prop)
+            api.properties.append(prop)
         x = next(it)
 
     for counter in count_properties:
@@ -413,12 +412,16 @@ def parseClass(name, it):
         prefix = counter.name[:-6]
         found = False
         for r in api.properties:
+            if r.name == counter.name:
+                continue
+            if "*" not in r.type:
+                continue
             if r.name.startswith(prefix):
                 r.counter = counter.name
                 found = True
                 break
         if not found:
-            api.properties.append(counter)
+            pass # Already appended
 
     return api
 
@@ -457,6 +460,8 @@ def produceBinding(args, api, meta):
         "handles_impl": [],
         "handles_oneliner": [],
         "enums": [],
+        "structs_decl": [],
+        "descriptors_decl": [],
         "callbacks": [],
         "procedures": [],
         "type_aliases": [],
@@ -474,6 +479,7 @@ def produceBinding(args, api, meta):
     class_cptr_names = [ f"{d.name} const *" for d in api.classes ]
     enum_names = [ e.name for e in api.enumerations ]
     enum_ptr_names = [ f"{e.name} *" for e in api.enumerations ]
+    simple_class_names = { d.name for d in api.classes }
     callbacks = {
         f"{cb.name}Callback": cb
         for cb in api.callbacks
@@ -490,18 +496,55 @@ def produceBinding(args, api, meta):
         arg_c = arg.name
         arg_cpp = arg.name
         skip_next = False
+        
+        # Cleanup type to identify base type
+        clean_type = arg_type.replace("struct ", "").strip()
+        
+        is_ptr = "*" in clean_type
+        is_const = "const" in clean_type
+        
+        base_candidates = clean_type.replace("const", "").replace("*", "").strip()
+        if base_candidates.startswith("WGPU"):
+            base_candidates = base_candidates[4:]
+            
+        if base_candidates in simple_class_names:
+            # It is a wrapped class (Descriptor or Struct)
+            cpp_base = base_candidates
+            c_base = "WGPU" + base_candidates
+            
+            # Determine C++ signature type: default to pointers to avoid nullability issues and simplify casting
+            cpp_sig = cpp_base
+            if is_const: cpp_sig = "const " + cpp_sig
+            if is_ptr: cpp_sig += " *"
+            
+            c_cast = c_base
+            if is_const: c_cast = "const " + c_cast
+            
+            if is_ptr:
+                 # Pointer argument: Value passed TO the C function. Needs reinterpret_cast
+                 cast_type_ptr = c_cast + " *"
+                 arg_c = f"reinterpret_cast<{cast_type_ptr}>({arg.name})"
+                 
+                 # arg_cpp callback conversion
+                 cpp_sig_ptr = cpp_sig
+                 arg_cpp = f"reinterpret_cast<{cpp_sig_ptr}>({arg.name})"
+            else:
+                 # Value argument (e.g. StringView): Cast address and dereference
+                 cast_type_ptr = c_cast + " *"
+                 arg_c = f"*reinterpret_cast<{cast_type_ptr}>(&{arg.name})"
+                 
+                 cpp_sig_ptr = cpp_sig + " *"
+                 arg_cpp = f"*reinterpret_cast<{cpp_sig_ptr}>(&{arg.name})"
+            
+            return f"{cpp_sig} {arg.name}", arg_c, arg_cpp, skip_next
 
+        # Fallback to old logic for Handles/Enums/Callbacks
         if arg_type.startswith("struct "):
             arg_type = arg_type[len("struct "):]
         if arg_type.startswith("WGPU"):
             arg_type = arg_type[len("WGPU"):]
 
-        if arg_type in class_cptr_names:
-            base_type = arg_type[:-8]
-            arg_type = f"const {base_type}&"
-            arg_c = f"&{arg_c}"
-            arg_cpp = f"*reinterpret_cast<{base_type} const *>({arg.name})"
-        elif arg_type in callbacks:
+        if arg_type in callbacks:
             arg_type = f"{arg_type}&&"
             arg_c = "cCallback"
             skip_next = True
@@ -532,6 +575,7 @@ def produceBinding(args, api, meta):
         if entry_type == 'CLASS':
             macro = "DESCRIPTOR" if handle_or_class.is_descriptor else "STRUCT"
             namespace = "descriptors" if handle_or_class.is_descriptor else "structs"
+            binding[namespace + "_decl"].append(f"struct {entry_name};")
             namespace_impl = "class_impl"
             namespace_oneliner = "class_oneliner"
             argument_self = "*this"
@@ -554,17 +598,40 @@ def produceBinding(args, api, meta):
 
         # Auto-generate setDefault
         if entry_type == 'CLASS':
-            decls.append(f"\t{maybe_inline}{entry_name}& setDefault();\n")
-
+            # Generate fields
+            fields_declaration = []
             cls_api = handle_or_class
             prop_names = [f"{p.name}" for p in cls_api.properties]
+            
+            for prop in cls_api.properties:
+                c_type = prop.type
+                is_ptr = "*" in c_type
+                is_const = "const" in c_type
+                base_type = c_type.replace("const", "").replace("*", "").replace("WGPU_NULLABLE", "").strip()
+                
+                cpp_base_type = base_type
+                if base_type.startswith("WGPU"):
+                    candidate = base_type[4:]
+                    if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
+                        cpp_base_type = candidate
+                elif base_type == "WGPUBool":
+                     cpp_base_type = "Bool"
+
+                cpp_type = cpp_base_type
+                if is_const: cpp_type = "const " + cpp_type
+                if is_ptr: cpp_type = cpp_type + " *"
+                
+                fields_declaration.append(f"\t{cpp_type} {prop.name};\n")
+            
+            decls.extend(fields_declaration)
+            decls.append(f"\t{maybe_inline}{entry_name}& setDefault();\n")
 
             init_macro = f"WGPU_{toConstantCase(entry_name)}_INIT"
             if init_macro not in api.init_macros:
                 logging.warning(f"Initialization macro '{init_macro}' was not found, falling back to empty initializer '{{}}'.")
                 init_macro = "{}"
             prop_defaults = [
-                f"\t*this = WGPU{entry_name} {init_macro};\n",
+                f"\treinterpret_cast<WGPU{entry_name}&>(*this) = WGPU{entry_name} {init_macro};\n",
             ]
             if "chain" in prop_names:
                 if entry_name in api.stypes:
@@ -581,8 +648,17 @@ def produceBinding(args, api, meta):
                 + "}\n"
             )
 
+            # Analyze properties to identify counters
+            prop_types = { p.name: p.type for p in cls_api.properties }
+            hidden_counters = set()
+            for p in cls_api.properties:
+                if p.counter:
+                    hidden_counters.add(p.counter)
+
             for prop in cls_api.properties:
                 if prop.name == "chain": continue
+                # Skip generating standalone setters for properties that are managed by an array setter
+                if prop.name in hidden_counters: continue
 
                 c_type = prop.type
                 is_ptr = "*" in c_type
@@ -608,22 +684,46 @@ def produceBinding(args, api, meta):
                 
                 trans_expr = arg_name
                 if cpp_base_type != base_type:
+                    # Case 1: bool arg -> WGPUBool/Bool field
                     if cpp_base_type == "bool" and base_type == "WGPUBool":
                          trans_expr = f"static_cast<WGPUBool>({arg_name} ? 1 : 0)"
-                    elif is_ptr:
-                        trans_expr = f"reinterpret_cast<{c_type}>({arg_name})"
+                    # Case 2: Enum arg -> Enum/int field (via cast)
                     elif cpp_base_type in enum_names:
-                        trans_expr = f"static_cast<{base_type}>({arg_name})"
+                        # WGPUEnum is C enum, Enum is C++ wrapper. 
+                        # Field is C++ wrapper Enum.
+                        # Arg is C++ wrapper Enum.
+                        # No cast needed if field is C++ type.
+                        trans_expr = arg_name
+                        pass
+
+                # If field is C++ type, we might not need reinterpret_cast for assignment unless mismatched
+                # Re-eval cpp_base_type for FIELD (might differ from argument if argument used 'bool')
+                field_base_type = base_type
+                if base_type.startswith("WGPU"):
+                    candidate = base_type[4:]
+                    if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
+                        field_base_type = candidate
+                elif base_type == "WGPUBool":
+                     field_base_type = "Bool" # Field is uint32_t/Bool
+                
+                field_type = field_base_type
+                if is_const: field_type = "const " + field_type
+                if is_ptr: field_type = field_type + " *"
+
+                # Internal assignment logic: this->prop = trans_expr;
+                assignment = f"\tthis->{prop.name} = {trans_expr};\n"
                 
                 if prop.counter:
                     # Array Setter
+                    counter_type = prop_types.get(prop.counter, "uint32_t").strip()
+                    
                     # 1. Pointer + Count
-                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(uint32_t {prop.counter}, {cpp_type} {prop.name});\n")
+                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({counter_type} {prop.counter}, {cpp_type} {prop.name});\n")
                     implems.append(
-                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(uint32_t {prop.counter}, {cpp_type} {prop.name}) {{\n"
+                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({counter_type} {prop.counter}, {cpp_type} {prop.name}) {{\n"
                         f"\tthis->{prop.counter} = {prop.counter};\n"
-                        f"\tthis->{prop.name} = {trans_expr};\n"
-                        f"\treturn *this;\n"
+                        + assignment
+                        + f"\treturn *this;\n"
                         f"}}\n"
                     )
                     
@@ -633,8 +733,8 @@ def produceBinding(args, api, meta):
                     decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({vec_arg} {prop.name});\n")
                     implems.append(
                         f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({vec_arg} {prop.name}) {{\n"
-                        f"\tthis->{prop.counter} = static_cast<uint32_t>({prop.name}.size());\n"
-                        f"\tthis->{prop.name} = reinterpret_cast<{c_type}>({prop.name}.data());\n"
+                        f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
+                        f"\tthis->{prop.name} = reinterpret_cast<{field_type}>({prop.name}.data());\n"
                         f"\treturn *this;\n"
                         f"}}\n"
                     )
@@ -643,10 +743,18 @@ def produceBinding(args, api, meta):
                     span_t = f"const {cpp_base_type}" if is_const else cpp_base_type
                     span_type = f"std::span<{span_t}>"
                     decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
+                    
+                    # If field_type is same as span's data type, no cast. 
+                    # field_type: const FeatureName*. Span data: const FeatureName*.
+                    
+                    data_access = f"{prop.name}.data()"
+                    if field_type != f"{span_t}*": # e.g. field is void*, or diff type
+                         data_access = f"reinterpret_cast<{field_type}>({prop.name}.data())"
+
                     implems.append(
                         f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
-                        f"\tthis->{prop.counter} = static_cast<uint32_t>({prop.name}.size());\n"
-                        f"\tthis->{prop.name} = reinterpret_cast<{c_type}>({prop.name}.data());\n"
+                        f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
+                        f"\tthis->{prop.name} = {data_access};\n"
                         f"\treturn *this;\n"
                         f"}}\n"
                     )
@@ -656,8 +764,8 @@ def produceBinding(args, api, meta):
                     decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({cpp_type} {prop.name});\n")
                     implems.append(
                         f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({cpp_type} {prop.name}) {{\n"
-                        f"\tthis->{prop.name} = {trans_expr};\n"
-                        f"\treturn *this;\n"
+                        + assignment
+                        + f"\treturn *this;\n"
                         f"}}\n"
                     )
 
@@ -704,12 +812,15 @@ def produceBinding(args, api, meta):
                 cb = callbacks[cb_type]
                 cb_arg_names = [ format_arg(a)[2] for a in cb.arguments[:-2] ]
                 cb_args = [ f"{a.type} {a.name}" for a in cb.arguments[:-2] ]
-
+                
+                cb_cpp_types = [ format_arg(a)[0].rsplit(' ', 1)[0] for a in cb.arguments[:-2] ]
+                
                 # Remove callbackInfo arg and add CallbackMode and Lambda
                 arguments.pop()
                 arguments.extend([ "CallbackMode callbackMode", "const Lambda& callback" ])
 
-                template_args = [ "typename Lambda" ]
+                invocable_args = ", ".join(cb_cpp_types)
+                template_args = [ f"std::invocable<{invocable_args}> Lambda" ]
 
                 body = "\n".join([
                     f"\tauto* lambda = new Lambda(callback);",
@@ -871,12 +982,28 @@ def produceBinding(args, api, meta):
         for proc in api.procedures:
             if proc.parent is not None:
                 continue
-            arg_sig = map(lambda a: f"{a.type} {a.name}", proc.arguments)
-            arg_names = map(lambda a: a.name, proc.arguments)
+            
+            arguments = []
+            argument_names = []
+            for arg in proc.arguments:
+                sig, c_expr, _, _ = format_arg(arg)
+                arguments.append(sig)
+                argument_names.append(c_expr)
+                
             proc_name = proc.name[0].lower() + proc.name[1:]
+            
+            # Return type handling
+            ret_type = proc.return_type
+            if ret_type.startswith("WGPU_EXPORT "):
+                 ret_type = ret_type[12:].strip()
+            
+            # Just strip WGPU prefix for signature
+            ret_sig = ret_type
+            if ret_sig.startswith("WGPU"): ret_sig = ret_sig[4:]
+            
             binding["procedures"].append(
-                f"{proc.return_type} {proc_name}({', '.join(arg_sig)}) {{\n"
-                + f"\treturn wgpu{proc.name}({', '.join(arg_names)});\n"
+                f"{ret_sig} {proc_name}({', '.join(arguments)}) {{\n"
+                + f"\treturn wgpu{proc.name}({', '.join(argument_names)});\n"
                 + "}"
             )
 

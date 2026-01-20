@@ -44,6 +44,7 @@
 #include <memory>
 #include <string_view>
 #include <span>
+#include <concepts>
 
 #if __EMSCRIPTEN__
 #include <emscripten.h>
@@ -97,28 +98,32 @@ private: \
 public:
 
 #define DESCRIPTOR(Type) \
-struct Type : public WGPU ## Type { \
+struct Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type() : W() { nextInChain = nullptr; } \
-	Type(const W &other) : W(other) { nextInChain = nullptr; } \
-	Type(const DefaultFlag &) : W() { setDefault(); } \
+	Type() { reinterpret_cast<W&>(*this) = {}; nextInChain = nullptr; } \
+	Type(const W &other) { reinterpret_cast<W&>(*this) = other; nextInChain = nullptr; } \
+	Type(const DefaultFlag &) { setDefault(); } \
 	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
+	operator W&() { return reinterpret_cast<W&>(*this); } \
+	operator const W&() const { return reinterpret_cast<const W&>(*this); } \
 	friend auto operator<<(std::ostream &stream, const S&) -> std::ostream & { \
 		return stream << "<wgpu::" << #Type << ">"; \
 	} \
 public:
 
 #define STRUCT_NO_OSTREAM(Type) \
-struct Type : public WGPU ## Type { \
+struct Type { \
 public: \
 	typedef Type S; /* S == Self */ \
 	typedef WGPU ## Type W; /* W == WGPU Type */ \
-	Type() : W() {} \
-	Type(const W &other) : W(other) {} \
-	Type(const DefaultFlag &) : W() { setDefault(); } \
+	Type() { reinterpret_cast<W&>(*this) = {}; } \
+	Type(const W &other) { reinterpret_cast<W&>(*this) = other; } \
+	Type(const DefaultFlag &) { setDefault(); } \
 	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
+	operator W&() { return reinterpret_cast<W&>(*this); } \
+	operator const W&() const { return reinterpret_cast<const W&>(*this); } \
 public:
 
 #define STRUCT(Type) \
@@ -151,16 +156,16 @@ HANDLE(Adapter)
 	Device requestDevice(const DeviceDescriptor& descriptor);
 END
 STRUCT(Color)
-	Color(double r, double g, double b, double a) : WGPUColor{ r, g, b, a } {}
+	Color(double r, double g, double b, double a) : r(r), g(g), b(b), a(a) {}
 END
 STRUCT(Extent3D)
-	Extent3D(uint32_t width, uint32_t height, uint32_t depthOrArrayLayers) : WGPUExtent3D{ width, height, depthOrArrayLayers } {}
+	Extent3D(uint32_t width, uint32_t height, uint32_t depthOrArrayLayers) : width(width), height(height), depthOrArrayLayers(depthOrArrayLayers) {}
 END
 STRUCT(Origin3D)
-	Origin3D(uint32_t x, uint32_t y, uint32_t z) : WGPUOrigin3D{ x, y, z } {}
+	Origin3D(uint32_t x, uint32_t y, uint32_t z) : x(x), y(y), z(z) {}
 END
 STRUCT_NO_OSTREAM(StringView)
-	StringView(const std::string_view& cpp) : WGPUStringView{ cpp.data(), cpp.length() } {}
+	StringView(const std::string_view& cpp) : data(cpp.data()), length(cpp.length()) {}
 	operator std::string_view() const;
 	friend auto operator<<(std::ostream& stream, const S& self) -> std::ostream& {
 		return stream << std::string_view(self);
@@ -178,20 +183,22 @@ wgpuDeviceGetLostFuture
 // Enumerations
 {{enums}}
 
+// Forward declarations
+{{structs_decl}}
+{{descriptors_decl}}
+{{handles_decl}}
+
+// Handles detailed declarations
+{{handles}}
+
 // Structs
 {{structs}}
 
 // Descriptors
 {{descriptors}}
 
-// Handles forward declarations
-{{handles_decl}}
-
 // Callback types
 {{callbacks}}
-
-// Handles detailed declarations
-{{handles}}
 
 // Non-member procedures
 {{procedures}}
