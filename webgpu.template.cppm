@@ -67,6 +67,8 @@ module;
 
 export module webgpu;
 
+{{c_exports}}
+
 /**
  * A namespace providing a more C++ idiomatic API to WebGPU.
  */

@@ -313,7 +313,7 @@ def parseHeader(api, header):
             enum_name2 = match.group(2)
             entry = EnumerationEntryApi(
                 key=match.group(3),
-                value=match.group(4),
+                value=f"WGPU{match.group(2)}_{match.group(3)}",
             )
             assert(enum_name == enum_name2)
             found = False
@@ -465,6 +465,7 @@ def produceBinding(args, api, meta):
         "callbacks": [],
         "procedures": [],
         "type_aliases": [],
+        "c_exports": [],
         "ext_suffix": args.ext_suffix,
     }
 
@@ -1025,15 +1026,33 @@ def produceBinding(args, api, meta):
         binding["enums"].append(enum)
 
     # Use a dict to merge duplicates
-    cb_dict = {
-        cb.name: map(lambda a: format_arg(a)[0], cb.arguments[:-1])
-        for cb in api.callbacks
-    }
-    for cb_name, cb_args in cb_dict.items():
-        binding["callbacks"].append(f"using {cb_name}Callback = std::function<void({', '.join(cb_args)})>;")
+    cb_names = { cb.name for cb in api.callbacks }
+    for cb_name in cb_names:
+        binding["callbacks"].append(f"using {cb_name}Callback = WGPU{cb_name}Callback;")
 
     for ta in api.type_aliases:
         binding["type_aliases"].append(f"using {ta.wgpu_type} = {ta.aliased_type};")
+
+    # Export C entities
+    for h in api.handles:
+        binding["c_exports"].append(f"export using ::WGPU{h.name};")
+
+    for c in api.classes:
+        binding["c_exports"].append(f"export using ::WGPU{c.name};")
+
+    for e in api.enumerations:
+        binding["c_exports"].append(f"export using ::WGPU{e.name};")
+        for entry in e.entries:
+             binding["c_exports"].append(f"export using ::{entry.value};")
+
+    for p in api.procedures:
+        binding["c_exports"].append(f"export using ::wgpu{p.name};")
+
+    for cb in api.callbacks:
+        binding["c_exports"].append(f"export using ::WGPU{cb.name}Callback;")
+
+    for ta in api.type_aliases:
+        binding["c_exports"].append(f"export using ::WGPU{ta.wgpu_type};")
 
     for k, v in binding.items():
         binding[k] = "\n".join(v)
