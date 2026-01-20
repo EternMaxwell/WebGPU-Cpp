@@ -12,8 +12,8 @@
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -31,47 +31,38 @@
 
 module;
 
-{
-  {
-    webgpu_includes
-  }
-}
+{{webgpu_includes}}
 
-#include <cassert>
-#include <cmath>
-#include <concepts>
-#include <functional>
 #include <iostream>
-#include <memory>
-#include <span>
-#include <string_view>
 #include <vector>
-
+#include <functional>
+#include <cassert>
+#include <concepts>
+#include <cmath>
+#include <memory>
+#include <string_view>
+#include <span>
 
 #if __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
 
 #ifdef _MSVC_LANG
-#if _MSVC_LANG >= 202002L
-#define NO_DISCARD                                                             \
-  [[nodiscard("You should keep this handle alive for as long as the callback " \
-              "may get invoked.")]]
-#elif _MSVC_LANG >= 201703L
-#define NO_DISCARD [[nodiscard]]
+#  if _MSVC_LANG >= 202002L
+#   define NO_DISCARD [[nodiscard("You should keep this handle alive for as long as the callback may get invoked.")]]
+#  elif _MSVC_LANG >= 201703L
+#   define NO_DISCARD [[nodiscard]]
+#  else
+#   define NO_DISCARD
+#  endif
 #else
-#define NO_DISCARD
-#endif
-#else
-#if __cplusplus >= 202002L
-#define NO_DISCARD                                                             \
-  [[nodiscard("You should keep this handle alive for as long as the callback " \
-              "may get invoked.")]]
-#elif __cplusplus >= 201703L
-#define NO_DISCARD [[nodiscard]]
-#else
-#define NO_DISCARD
-#endif
+#  if __cplusplus >= 202002L
+#    define NO_DISCARD [[nodiscard("You should keep this handle alive for as long as the callback may get invoked.")]]
+#  elif __cplusplus >= 201703L
+#    define NO_DISCARD [[nodiscard]]
+#  else
+#    define NO_DISCARD
+#  endif
 #endif
 
 export module webgpu;
@@ -84,333 +75,233 @@ export namespace wgpu {
 struct DefaultFlag {};
 constexpr DefaultFlag Default;
 
-#define HANDLE(Type)                                                           \
-  class Type {                                                                 \
-  public:                                                                      \
-    typedef Type S;                                                            \
-    typedef WGPU##Type W;                                                      \
-    constexpr Type() : m_raw(nullptr) {}                                       \
-    constexpr Type(const W &w) : m_raw(w) {}                                   \
-    Type(const Type &other) : m_raw(other.m_raw) {                             \
-      if (m_raw)                                                               \
-        wgpu##Type##AddRef(m_raw);                                             \
-    }                                                                          \
-    Type(Type &&other) noexcept : m_raw(other.m_raw) {                         \
-      other.m_raw = nullptr;                                                   \
-    }                                                                          \
-    Type &operator=(const Type &other) {                                       \
-      if (this != &other) {                                                    \
-        if (m_raw)                                                             \
-          wgpu##Type##Release(m_raw);                                          \
-        m_raw = other.m_raw;                                                   \
-        if (m_raw)                                                             \
-          wgpu##Type##AddRef(m_raw);                                           \
-      }                                                                        \
-      return *this;                                                            \
-    }                                                                          \
-    Type &operator=(Type &&other) noexcept {                                   \
-      if (this != &other) {                                                    \
-        if (m_raw)                                                             \
-          wgpu##Type##Release(m_raw);                                          \
-        m_raw = other.m_raw;                                                   \
-        other.m_raw = nullptr;                                                 \
-      }                                                                        \
-      return *this;                                                            \
-    }                                                                          \
-    ~Type() {                                                                  \
-      if (m_raw)                                                               \
-        wgpu##Type##Release(m_raw);                                            \
-    }                                                                          \
-    operator W &() { return m_raw; }                                           \
-    operator const W &() const { return m_raw; }                               \
-    operator bool() const { return m_raw != nullptr; }                         \
-    bool operator==(const Type &other) const { return m_raw == other.m_raw; }  \
-    bool operator!=(const Type &other) const { return m_raw != other.m_raw; }  \
-    bool operator==(const W &other) const { return m_raw == other; }           \
-    bool operator!=(const W &other) const { return m_raw != other; }           \
-    friend auto operator<<(std::ostream &stream, const S &self)                \
-        -> std::ostream & {                                                    \
-      return stream << "<wgpu::" << #Type << " " << self.m_raw << ">";         \
-    }                                                                          \
-                                                                               \
-  private:                                                                     \
-    W m_raw;                                                                   \
-                                                                               \
-  public:
-
-#define DESCRIPTOR(Type)                                                       \
-  struct Type {                                                                \
-  public:                                                                      \
-    typedef Type S;       /* S == Self */                                      \
-    typedef WGPU##Type W; /* W == WGPU Type */                                 \
-    Type() {                                                                   \
-      reinterpret_cast<W &>(*this) = {};                                       \
-      nextInChain = nullptr;                                                   \
-    }                                                                          \
-    Type(const W &other) {                                                     \
-      reinterpret_cast<W &>(*this) = other;                                    \
-      nextInChain = nullptr;                                                   \
-    }                                                                          \
-    Type(const DefaultFlag &) { setDefault(); }                                \
-    Type &operator=(const DefaultFlag &) {                                     \
-      setDefault();                                                            \
-      return *this;                                                            \
-    }                                                                          \
-    operator W &() { return reinterpret_cast<W &>(*this); }                    \
-    operator const W &() const { return reinterpret_cast<const W &>(*this); }  \
-    friend auto operator<<(std::ostream &stream, const S &)                    \
-        -> std::ostream & {                                                    \
-      return stream << "<wgpu::" << #Type << ">";                              \
-    }                                                                          \
-                                                                               \
-  public:
-
-#define STRUCT_NO_OSTREAM(Type)                                                \
-  struct Type {                                                                \
-  public:                                                                      \
-    typedef Type S;       /* S == Self */                                      \
-    typedef WGPU##Type W; /* W == WGPU Type */                                 \
-    Type() { reinterpret_cast<W &>(*this) = {}; }                              \
-    Type(const W &other) { reinterpret_cast<W &>(*this) = other; }             \
-    Type(const DefaultFlag &) { setDefault(); }                                \
-    Type &operator=(const DefaultFlag &) {                                     \
-      setDefault();                                                            \
-      return *this;                                                            \
-    }                                                                          \
-    operator W &() { return reinterpret_cast<W &>(*this); }                    \
-    operator const W &() const { return reinterpret_cast<const W &>(*this); }  \
-                                                                               \
-  public:
-
-#define STRUCT(Type)                                                           \
-  STRUCT_NO_OSTREAM(Type)                                                      \
-  friend auto operator<<(std::ostream &stream, const S &)->std::ostream & {    \
-    return stream << "<wgpu::" << #Type << ">";                                \
-  }                                                                            \
-                                                                               \
+#define HANDLE(Type) \
+class Type { \
+public: \
+	typedef Type S; /* S == Self */ \
+	typedef WGPU ## Type W; /* W == WGPU Type */ \
+	Type() : m_raw(nullptr) {} \
+	Type(const W& w) : m_raw(w) {} \
+	operator W&() { return m_raw; } \
+	operator const W&() const { return m_raw; } \
+	operator bool() const { return m_raw != nullptr; } \
+	bool operator==(const Type& other) const { return m_raw == other.m_raw; } \
+	bool operator!=(const Type& other) const { return m_raw != other.m_raw; } \
+	bool operator==(const W& other) const { return m_raw == other; } \
+	bool operator!=(const W& other) const { return m_raw != other; } \
+	friend auto operator<<(std::ostream &stream, const S& self) -> std::ostream & { \
+		return stream << "<wgpu::" << #Type << " " << self.m_raw << ">"; \
+	} \
+private: \
+	W m_raw; \
 public:
 
-#define ENUM(Type)                                                             \
-  class Type {                                                                 \
-  public:                                                                      \
-    typedef Type S;                  /* S == Self */                           \
-    typedef WGPU##Type W;            /* W == WGPU Type */                      \
-    constexpr Type() : m_raw(W{}) {} /* Using default value-initialization */  \
-    constexpr Type(const W &w) : m_raw(w) {}                                   \
-    constexpr operator W() const { return m_raw; }                             \
-    W m_raw; /* Ideally, this would be private, but then types generated with  \
-                this macro would not be structural. */
+#define DESCRIPTOR(Type) \
+struct Type { \
+public: \
+	typedef Type S; /* S == Self */ \
+	typedef WGPU ## Type W; /* W == WGPU Type */ \
+	Type() { reinterpret_cast<W&>(*this) = {}; nextInChain = nullptr; } \
+	Type(const W &other) { reinterpret_cast<W&>(*this) = other; nextInChain = nullptr; } \
+	Type(const DefaultFlag &) { setDefault(); } \
+	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
+	operator W&() { return reinterpret_cast<W&>(*this); } \
+	operator const W&() const { return reinterpret_cast<const W&>(*this); } \
+	friend auto operator<<(std::ostream &stream, const S&) -> std::ostream & { \
+		return stream << "<wgpu::" << #Type << ">"; \
+	} \
+public:
 
-#define ENUM_ENTRY(Name, Value) static constexpr W Name = (W)(Value);
+#define STRUCT_NO_OSTREAM(Type) \
+struct Type { \
+public: \
+	typedef Type S; /* S == Self */ \
+	typedef WGPU ## Type W; /* W == WGPU Type */ \
+	Type() { reinterpret_cast<W&>(*this) = {}; } \
+	Type(const W &other) { reinterpret_cast<W&>(*this) = other; } \
+	Type(const DefaultFlag &) { setDefault(); } \
+	Type& operator=(const DefaultFlag &) { setDefault(); return *this; } \
+	operator W&() { return reinterpret_cast<W&>(*this); } \
+	operator const W&() const { return reinterpret_cast<const W&>(*this); } \
+public:
 
-#define END                                                                    \
-  }                                                                            \
-  ;
+#define STRUCT(Type) \
+STRUCT_NO_OSTREAM(Type) \
+	friend auto operator<<(std::ostream &stream, const S&) -> std::ostream & { \
+		return stream << "<wgpu::" << #Type << ">"; \
+	} \
+public:
 
-{
-  {
-    begin - inject
-  }
-}
+#define ENUM(Type) \
+class Type { \
+public: \
+	typedef Type S; /* S == Self */ \
+	typedef WGPU ## Type W; /* W == WGPU Type */ \
+	constexpr Type() : m_raw(W{}) {} /* Using default value-initialization */ \
+	constexpr Type(const W& w) : m_raw(w) {} \
+	constexpr operator W() const { return m_raw; } \
+	W m_raw; /* Ideally, this would be private, but then types generated with this macro would not be structural. */
+
+#define ENUM_ENTRY(Name, Value) \
+	static constexpr W Name = (W)(Value);
+
+#define END };
+
+{{begin-inject}}
 HANDLE(Instance)
-Adapter requestAdapter(const RequestAdapterOptions &options);
-END HANDLE(Adapter) Device requestDevice(const DeviceDescriptor &descriptor);
-END STRUCT(Color) Color(double r, double g, double b, double a)
-    : r(r), g(g), b(b), a(a) {}
-END STRUCT(Extent3D)
-    Extent3D(uint32_t width, uint32_t height, uint32_t depthOrArrayLayers)
-    : width(width), height(height), depthOrArrayLayers(depthOrArrayLayers) {}
-END STRUCT(Origin3D) Origin3D(uint32_t x, uint32_t y, uint32_t z)
-    : x(x), y(y), z(z) {}
-END STRUCT_NO_OSTREAM(StringView) StringView(const std::string_view &cpp)
-    : data(cpp.data()), length(cpp.length()) {}
-operator std::string_view() const;
-friend auto operator<<(std::ostream &stream, const S &self) -> std::ostream & {
-  return stream << std::string_view(self);
-}
-END{{end - inject}}
+	Adapter requestAdapter(const RequestAdapterOptions& options);
+END
+HANDLE(Adapter)
+	Device requestDevice(const DeviceDescriptor& descriptor);
+END
+STRUCT(Color)
+	Color(double r, double g, double b, double a) : r(r), g(g), b(b), a(a) {}
+END
+STRUCT(Extent3D)
+	Extent3D(uint32_t width, uint32_t height, uint32_t depthOrArrayLayers) : width(width), height(height), depthOrArrayLayers(depthOrArrayLayers) {}
+END
+STRUCT(Origin3D)
+	Origin3D(uint32_t x, uint32_t y, uint32_t z) : x(x), y(y), z(z) {}
+END
+STRUCT_NO_OSTREAM(StringView)
+	StringView(const std::string_view& cpp) : data(cpp.data()), length(cpp.length()) {}
+	operator std::string_view() const;
+	friend auto operator<<(std::ostream& stream, const S& self) -> std::ostream& {
+		return stream << std::string_view(self);
+	}
+END
+{{end-inject}}
 
-{
-  {
-    begin - blacklist
-  }
-}
-wgpuDeviceGetLostFuture{{end - blacklist}}
+{{begin-blacklist}}
+wgpuDeviceGetLostFuture
+{{end-blacklist}}
 
 // Other type aliases
-{
-  {
-    type_aliases
-  }
-}
+{{type_aliases}}
 
 // Enumerations
-{
-  {
-    enums
-  }
-}
+{{enums}}
 
 // Forward declarations
-{
-  {
-    structs_decl
-  }
-}
-{
-  {
-    descriptors_decl
-  }
-}
-{
-  {
-    handles_decl
-  }
-}
+{{structs_decl}}
+{{descriptors_decl}}
+{{handles_decl}}
 
 // RAII Handles
-{
-  {
-    handles
-  }
-}
+{{handles}}
 
 // Structs
-{
-  {
-    structs
-  }
-}
+{{structs}}
 
 // Descriptors
-{
-  {
-    descriptors
-  }
-}
+{{descriptors}}
 
 // Callback types
-{
-  {
-    callbacks
-  }
-}
+{{callbacks}}
 
 // Non-member procedures
-{
-  {
-    procedures
-  }
-}
+{{procedures}}
 
 export Instance createInstance();
-export Instance createInstance(const InstanceDescriptor &descriptor);
+export Instance createInstance(const InstanceDescriptor& descriptor);
 
 // Implementations
 
-Instance createInstance() { return wgpuCreateInstance(nullptr); }
+Instance createInstance() {
+	return wgpuCreateInstance(nullptr);
+}
 
-Instance createInstance(const InstanceDescriptor &descriptor) {
-  return wgpuCreateInstance(
-      reinterpret_cast<const WGPUInstanceDescriptor *>(&descriptor));
+Instance createInstance(const InstanceDescriptor& descriptor) {
+	return wgpuCreateInstance(reinterpret_cast<const WGPUInstanceDescriptor*>(&descriptor));
 }
 
 StringView::operator std::string_view() const {
-  return length == WGPU_STRLEN ? std::string_view(data)
-                               : std::string_view(data, length);
+	return
+		length == WGPU_STRLEN
+		? std::string_view(data)
+		: std::string_view(data, length);
 }
 
 // RAII Implementations
-{
-  {
-    handles_impl
-  }
-}
+{{handles_impl}}
 
 // Extra implementations
-Adapter Instance::requestAdapter(const RequestAdapterOptions &options) {
-  struct Context {
-    Adapter adapter = nullptr;
-    bool requestEnded = false;
-  };
-  Context context;
+Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
+	struct Context {
+		Adapter adapter = nullptr;
+		bool requestEnded = false;
+	};
+	Context context;
 
-  RequestAdapterCallbackInfo {
-    {
-      ext_suffix
-    }
-  }
-  callbackInfo;
-  callbackInfo.nextInChain = nullptr;
-  callbackInfo.userdata1 = &context;
-  callbackInfo.callback = [](WGPURequestAdapterStatus status,
-                             WGPUAdapter adapter, WGPUStringView message,
-                             void *userdata1,
-                             [[maybe_unused]] void *userdata2) {
-    Context &context = *reinterpret_cast<Context *>(userdata1);
-    if (status == RequestAdapterStatus::Success) {
-      context.adapter = adapter;
-    } else {
-      std::cout << "Could not get WebGPU adapter: " << StringView(message)
-                << std::endl;
-    }
-    context.requestEnded = true;
-  };
-  callbackInfo.mode = CallbackMode::AllowSpontaneous;
-  wgpuInstanceRequestAdapter(
-      *this, reinterpret_cast<const WGPURequestAdapterOptions *>(&options),
-      callbackInfo);
+	RequestAdapterCallbackInfo{{ext_suffix}} callbackInfo;
+	callbackInfo.nextInChain = nullptr;
+	callbackInfo.userdata1 = &context;
+	callbackInfo.callback = [](
+		WGPURequestAdapterStatus status,
+		WGPUAdapter adapter,
+		WGPUStringView message,
+		void* userdata1,
+		[[maybe_unused]] void* userdata2
+	) {
+		Context& context = *reinterpret_cast<Context*>(userdata1);
+		if (status == RequestAdapterStatus::Success) {
+			context.adapter = adapter;
+		}
+		else {
+			std::cout << "Could not get WebGPU adapter: " << StringView(message) << std::endl;
+		}
+		context.requestEnded = true;
+	};
+	callbackInfo.mode = CallbackMode::AllowSpontaneous;
+	wgpuInstanceRequestAdapter(*this, reinterpret_cast<const WGPURequestAdapterOptions*>(&options), callbackInfo);
 
 #if __EMSCRIPTEN__
-  while (!context.requestEnded) {
-    emscripten_sleep(50);
-  }
+	while (!context.requestEnded) {
+		emscripten_sleep(50);
+	}
 #endif
 
-  assert(context.requestEnded);
-  return context.adapter;
+	assert(context.requestEnded);
+	return context.adapter;
 }
 
-Device Adapter::requestDevice(const DeviceDescriptor &descriptor) {
-  struct Context {
-    Device device = nullptr;
-    bool requestEnded = false;
-  };
-  Context context;
+Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
+	struct Context {
+		Device device = nullptr;
+		bool requestEnded = false;
+	};
+	Context context;
 
-  RequestDeviceCallbackInfo {
-    {
-      ext_suffix
-    }
-  }
-  callbackInfo;
-  callbackInfo.nextInChain = nullptr;
-  callbackInfo.userdata1 = &context;
-  callbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
-                             WGPUStringView message, void *userdata1,
-                             [[maybe_unused]] void *userdata2) {
-    Context &context = *reinterpret_cast<Context *>(userdata1);
-    if (status == RequestDeviceStatus::Success) {
-      context.device = device;
-    } else {
-      std::cout << "Could not get WebGPU device: " << StringView(message)
-                << std::endl;
-    }
-    context.requestEnded = true;
-  };
-  callbackInfo.mode = CallbackMode::AllowSpontaneous;
-  wgpuAdapterRequestDevice(
-      *this, reinterpret_cast<const WGPUDeviceDescriptor *>(&descriptor),
-      callbackInfo);
+	RequestDeviceCallbackInfo{{ext_suffix}} callbackInfo;
+	callbackInfo.nextInChain = nullptr;
+	callbackInfo.userdata1 = &context;
+	callbackInfo.callback = [](
+		WGPURequestDeviceStatus status,
+		WGPUDevice device,
+		WGPUStringView message,
+		void* userdata1,
+		[[maybe_unused]] void* userdata2
+	) {
+		Context& context = *reinterpret_cast<Context*>(userdata1);
+		if (status == RequestDeviceStatus::Success) {
+			context.device = device;
+		}
+		else {
+			std::cout << "Could not get WebGPU device: " << StringView(message) << std::endl;
+		}
+		context.requestEnded = true;
+	};
+	callbackInfo.mode = CallbackMode::AllowSpontaneous;
+	wgpuAdapterRequestDevice(*this, reinterpret_cast<const WGPUDeviceDescriptor*>(&descriptor), callbackInfo);
 
 #if __EMSCRIPTEN__
-  while (!context.requestEnded) {
-    emscripten_sleep(50);
-  }
+	while (!context.requestEnded) {
+		emscripten_sleep(50);
+	}
 #endif
 
-  assert(context.requestEnded);
-  return context.device;
+	assert(context.requestEnded);
+	return context.device;
 }
 
 #undef HANDLE
