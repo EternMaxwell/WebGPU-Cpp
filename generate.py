@@ -120,7 +120,7 @@ def main(args):
         header = downloadHeader(url)
         parseHeader(api, header)
 
-    binding = produceBinding(args, api, meta)
+    binding = produceBinding(args, api, meta, template)
     
     generateOutput(args.output, template, binding)
 
@@ -447,7 +447,7 @@ def parseProcArgs(line):
 
 # -----------------------------------------------------------------------------
 
-def produceBinding(args, api, meta):
+def produceBinding(args, api, meta, template):
     """Produce C++ binding"""
     binding = {
         "webgpu_includes": [],
@@ -487,11 +487,12 @@ def produceBinding(args, api, meta):
         defines_block.append(f"#define {val} {val}_Internal")
         undefs_block.append(f"#undef {val}")
 
-    binding["webgpu_includes"] = (
-        defines_block + 
-        binding["webgpu_includes"] + 
-        undefs_block
-    )
+    if "{c_exports}" in template:
+        binding["webgpu_includes"] = (
+            defines_block + 
+            binding["webgpu_includes"] + 
+            undefs_block
+        )
 
     # Cached variables for format_arg
     handle_names = [ h.name for h in api.handles ]
