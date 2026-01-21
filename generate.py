@@ -88,7 +88,7 @@ def makeArgParser():
     parser.add_argument("--no-scoped-enums", action='store_false', dest="use_scoped_enums",
                         help="Do not replace WebGPU enums with C++ scoped enums")
 
-    parser.add_argument("--no-fake-scoped-enums", action='store_false', dest="use_fake_scoped_enums",
+    parser.add_argument("--use-fake-scoped-enums", action='store_true', dest="use_fake_scoped_enums",
                         help="Use scoped aliases to original enum values so that no casting is needed")
 
     parser.add_argument("--use-non-member-procedures", action='store_true',
@@ -467,6 +467,9 @@ def produceBinding(args, api, meta, template):
         "procedures": [],
         "type_aliases": [],
         "c_exports": [],
+        "to_string_decl": [],
+        "to_string_impl": [],
+        "template_impl": [],
         "ext_suffix": args.ext_suffix,
     }
 
@@ -616,6 +619,7 @@ def produceBinding(args, api, meta, template):
         decls = []
         implems = []
         defaults_implems = []
+        template_implems = []
 
         # Auto-generate setDefault
         if entry_type == 'CLASS':
@@ -656,8 +660,12 @@ def produceBinding(args, api, meta, template):
             ]
             if "chain" in prop_names:
                 if entry_name in api.stypes:
+                    default_val = api.stypes[entry_name]
+                    if args.use_scoped_enums and default_val.startswith("(WGPUSType)"):
+                        default_val = f"static_cast<SType>(static_cast<uint32_t>({default_val[11:]}))"
+
                     prop_defaults.extend([
-                        f"\tchain.sType = {api.stypes[entry_name]};\n",
+                        f"\tchain.sType = {default_val};\n",
                         f"\tchain.next = nullptr;\n",
                     ])
                 else:
@@ -889,11 +897,17 @@ def produceBinding(args, api, meta, template):
                     + "}\n"
                 )
             else:
+                current_template_impl = (
+                    "template<" + ", ".join(template_args) + ">\n"
+                    + f"{maybe_inline}{return_type} {entry_name}::{name_and_args} {{\n"
+                    + body.replace("{wrapped_call}", wrapped_call)
+                    + "}\n"
+                )
+                template_implems.append(current_template_impl)
+                
                 decls.append(
                     "\ttemplate<" + ", ".join(template_args) + ">\n"
-                    + f"\t{maybe_inline}{return_type} {name_and_args} {{\n"
-                    + "\t" + body.replace("{wrapped_call}", wrapped_call).replace("\n", "\n\t")
-                    + "}\n"
+                    + f"\t{maybe_inline}{return_type} {name_and_args};\n"
                 )
 
             # Add utility overload for arguments of the form 'uint32_t xxCount, Xx const * xx'
@@ -992,6 +1006,13 @@ def produceBinding(args, api, meta, template):
             + "\n"
         )
 
+        if len(template_implems) > 0:
+            binding["template_impl"].append(
+                f"// Template methods of {entry_name}\n"
+                + "".join(template_implems)
+                + "\n"
+            )
+
     # Only handles_impl is present in the tamplate
     binding["handles_impl"] = (
         binding["defaults_impl"] +
@@ -1031,20 +1052,55 @@ def produceBinding(args, api, meta, template):
     for enum in api.enumerations:
         if args.use_scoped_enums:
             if args.use_fake_scoped_enums:
-                enum = (
+                enum_text = (
                     f"ENUM({enum.name})\n"
                     + "".join([ f"\tENUM_ENTRY({formatEnumValue(e.key)}, {e.value})\n" for e in enum.entries ])
                     + "END"
                 )
             else:
-                enum = (
-                    f"enum class {enum.name}: int {{\n"
+                # True enum class
+                enum_text = (
+                    f"enum class {enum.name}: uint32_t {{\n"
                     + "".join([ f"\t{formatEnumValue(e.key)} = {e.value},\n" for e in enum.entries ])
-                    + "};"
+                    + "};\n"
                 )
+                
+                # Operators
+                enum_text += f"""
+inline constexpr bool operator==({enum.name} a, WGPU{enum.name} b) {{ return static_cast<uint32_t>(a) == static_cast<uint32_t>(b); }}
+inline constexpr bool operator==(WGPU{enum.name} a, {enum.name} b) {{ return static_cast<uint32_t>(a) == static_cast<uint32_t>(b); }}
+inline constexpr bool operator!=({enum.name} a, WGPU{enum.name} b) {{ return !(a == b); }}
+inline constexpr bool operator!=(WGPU{enum.name} a, {enum.name} b) {{ return !(a == b); }}
+
+inline constexpr {enum.name} operator|({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }}
+inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b)); }}
+inline constexpr {enum.name} operator^({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) ^ static_cast<uint32_t>(b)); }}
+inline constexpr {enum.name} operator~({enum.name} a) {{ return static_cast<{enum.name}>(~static_cast<uint32_t>(a)); }}
+"""
+                
         else:
-            enum = f"typedef WGPU{enum.name} {enum.name};"
-        binding["enums"].append(enum)
+            enum_text = f"typedef WGPU{enum.name} {enum.name};"
+        binding["enums"].append(enum_text)
+        
+        # to_string
+        decl = f"std::string_view to_string({enum.name} v);"
+        binding["to_string_decl"].append(decl)
+        
+        impl = f"""std::string_view to_string({enum.name} v) {{
+    switch (v) {{
+"""
+        for e in enum.entries:
+            key = formatEnumValue(e.key)
+            val = f"{enum.name}::{key}" if args.use_scoped_enums else f"WGPU{enum.name}_{key}"
+            if args.use_scoped_enums and args.use_fake_scoped_enums:
+                 val = f"{enum.name}::{key}"
+            impl += f"    case {val}: return \"wgpu::{enum.name}::{key}\";\n"
+            
+        impl += f"""    default: return "Unknown";
+    }}
+}}
+"""
+        binding["to_string_impl"].append(impl)
 
     # Use a dict to merge duplicates
     cb_names = { cb.name for cb in api.callbacks }

@@ -208,6 +208,7 @@ wgpuDeviceGetLostFuture
 
 // Enumerations
 {{enums}}
+{{to_string_decl}}
 
 // Forward declarations
 {{structs_decl}}
@@ -229,8 +230,8 @@ wgpuDeviceGetLostFuture
 // Non-member procedures
 {{procedures}}
 
-export Instance createInstance();
-export Instance createInstance(const InstanceDescriptor& descriptor);
+Instance createInstance();
+Instance createInstance(const InstanceDescriptor& descriptor);
 
 // Implementations
 
@@ -248,9 +249,18 @@ StringView::operator std::string_view() const {
 		? std::string_view(data)
 		: std::string_view(data, length);
 }
+}
+
+namespace wgpu {
 
 // RAII Implementations
 {{handles_impl}}
+
+// to_string implementations
+{{to_string_impl}}
+
+// Template methods of Instance
+{{template_impl}}
 
 // Extra implementations
 Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {

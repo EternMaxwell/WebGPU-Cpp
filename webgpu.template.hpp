@@ -182,6 +182,7 @@ wgpuDeviceGetLostFuture
 
 // Enumerations
 {{enums}}
+{{to_string_decl}}
 
 // Forward declarations
 {{structs_decl}}
@@ -203,6 +204,9 @@ wgpuDeviceGetLostFuture
 // Non-member procedures
 {{procedures}}
 
+// Template methods
+{{template_impl}}
+
 Instance createInstance();
 Instance createInstance(const InstanceDescriptor& descriptor);
 
@@ -218,6 +222,7 @@ Instance createInstance(const InstanceDescriptor& descriptor) {
 
 // Handles members implementation
 {{handles_impl}}
+{{to_string_impl}}
 
 // Extra implementations
 Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
