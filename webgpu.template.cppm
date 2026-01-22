@@ -103,6 +103,18 @@ class RaiiHandle : public H {
 public:
     using H::H; // Inherit constructors
 	RaiiHandle(const H& handle) : H(handle) {}
+	RaiiHandle& operator=(const H& handle) {
+		H& h = *this;
+		if (h) h.release();
+		h = handle;
+		return *this;
+	}
+	RaiiHandle& operator=(std::nullptr_t) {
+		H& h = *this;
+		if (h) h.release();
+		h = nullptr;
+		return *this;
+	}
 	RaiiHandle(const RaiiHandle& other) {
 		H& h = *this;
 		if (h) h.release();
