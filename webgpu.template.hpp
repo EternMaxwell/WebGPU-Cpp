@@ -68,13 +68,15 @@
 #  endif
 #endif
 
-/**
- * A namespace providing a more C++ idiomatic API to WebGPU.
- */
-namespace wgpu {
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 
 struct DefaultFlag {};
 constexpr DefaultFlag Default;
+
+}
 
 #define HANDLE(Type) \
 class Type { \
@@ -208,24 +210,33 @@ wgpuDeviceGetLostFuture
 {{handle_template_impl}}
 {{class_template_impl}}
 
-Instance createInstance();
-Instance createInstance(const InstanceDescriptor& descriptor);
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 
-#ifdef WEBGPU_CPP_IMPLEMENTATION
-
-Instance createInstance() {
+inline Instance createInstance() {
 	return wgpuCreateInstance(nullptr);
 }
 
-Instance createInstance(const InstanceDescriptor& descriptor) {
+inline Instance createInstance(const InstanceDescriptor& descriptor) {
 	return wgpuCreateInstance(&descriptor);
 }
+
+}
+
+#ifdef WEBGPU_CPP_IMPLEMENTATION
 
 // Handles members implementation
 {{defaults_impl}}
 {{class_impl}}
 {{handles_impl}}
 {{to_string_impl}}
+
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 
 // Extra implementations
 Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
@@ -313,6 +324,8 @@ StringView::operator std::string_view() const {
 		: std::string_view(data, length);
 }
 
+}
+
 #endif // WEBGPU_CPP_IMPLEMENTATION
 
 #undef HANDLE
@@ -320,5 +333,3 @@ StringView::operator std::string_view() const {
 #undef ENUM
 #undef ENUM_ENTRY
 #undef END
-
-} // namespace wgpu

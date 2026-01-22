@@ -69,13 +69,16 @@ export module webgpu;
 
 {{c_exports}}
 
-/**
- * A namespace providing a more C++ idiomatic API to WebGPU.
- */
-export namespace wgpu {
+export
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 
 struct DefaultFlag {};
 constexpr DefaultFlag Default;
+
+}
 
 #define HANDLE(Type) \
 class Type { \
@@ -98,65 +101,62 @@ private: \
 	W m_raw; \
 public:
 
-template <typename H>
-class RaiiHandle : public H {
-public:
-    using H::H; // Inherit constructors
-	RaiiHandle(const H& handle) : H(handle) {}
-	RaiiHandle& operator=(const H& handle) {
-		H& h = *this;
-		if (h) h.release();
-		h = handle;
-		return *this;
-	}
-	RaiiHandle& operator=(std::nullptr_t) {
-		H& h = *this;
-		if (h) h.release();
-		h = nullptr;
-		return *this;
-	}
-	RaiiHandle(const RaiiHandle& other) {
-		H& h = *this;
-		if (h) h.release();
-		h = other;
-		h.addRef();
-	}
-	RaiiHandle& operator=(const RaiiHandle& other) {
-		H& h = *this;
-		if (h) h.release();
-		h = other;
-		h.addRef();
-		return *this;
-	}
-	RaiiHandle(RaiiHandle&& other) noexcept {
-		H& h = *this;
-		if (h) h.release();
-		h = other;
-		other = nullptr;
-	}
-	RaiiHandle& operator=(RaiiHandle&& other) noexcept {
-		H& h = *this;
-		if (h) h.release();
-		h = other;
-		other = nullptr;
-		return *this;
-	}
-	~RaiiHandle() {
-		H& h = *this;
-		if (h) h.release();
-		h = nullptr;
-	}
-	operator H() const { return *this; }
-	operator typename H::W() const { return (H&)(*this); }
-	operator bool() const { return (H&)(*this); }
-	bool operator==(const RaiiHandle& other) const { return (H&)(*this) == (H&)(other); }
-	bool operator!=(const RaiiHandle& other) const { return (H&)(*this) != (H&)(other); }
-	bool operator==(const typename H::W& other) const { return (H&)(*this) == other; }
-	bool operator!=(const typename H::W& other) const { return (H&)(*this) != other; }
-};
-
 #define HANDLE_RAII(Type, Template) \
-using Type = wgpu::RaiiHandle< wgpu:: ## Template >;
+class Type : public Template { \
+public: \
+	typedef Template H; \
+    using H::H; \
+	Type(const H& handle) : H(handle) {} \
+	Type& operator=(const H& handle) { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = handle; \
+		return *this; \
+	} \
+	Type& operator=(std::nullptr_t) { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = nullptr; \
+		return *this; \
+	} \
+	Type(const Type& other) { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = other; \
+		h.addRef(); \
+	} \
+	Type& operator=(const Type& other) { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = other; \
+		h.addRef(); \
+		return *this; \
+	} \
+	Type(Type&& other) noexcept { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = other; \
+		other = nullptr; \
+	} \
+	Type& operator=(Type&& other) noexcept { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = other; \
+		other = nullptr; \
+		return *this; \
+	} \
+	~Type() { \
+		H& h = *this; \
+		if (h) h.release(); \
+		h = nullptr; \
+	} \
+	operator typename H::W() const { return (H&)(*this); } \
+	operator bool() const { return (H&)(*this); } \
+	bool operator==(const Type& other) const { return (H&)(*this) == (H&)(other); } \
+	bool operator!=(const Type& other) const { return (H&)(*this) != (H&)(other); } \
+	bool operator==(const typename H::W& other) const { return (H&)(*this) == other; } \
+	bool operator!=(const typename H::W& other) const { return (H&)(*this) != other; } \
+};
 
 #define DESCRIPTOR(Type) \
 struct Type { \
@@ -239,6 +239,8 @@ END
 wgpuDeviceGetLostFuture
 {{end-blacklist}}
 
+export {
+
 // Other type aliases
 {{type_aliases}}
 
@@ -269,6 +271,10 @@ wgpuDeviceGetLostFuture
 // Non-member procedures
 {{procedures}}
 
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 using InstanceHandle = 
 #ifdef WEBGPU_CPP_USE_RAW_NAMESPACE
 raw::Instance;
@@ -278,10 +284,10 @@ Instance;
 
 InstanceHandle createInstance();
 InstanceHandle createInstance(const InstanceDescriptor& descriptor);
+}
 
 }
 
-namespace wgpu {
 
 // Implementations
 {{defaults_impl}}
@@ -294,7 +300,10 @@ namespace wgpu {
 {{class_template_impl}}
 
 // Extra implementations
-
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
+#endif
+{
 StringView::operator std::string_view() const {
 	return
 		length == WGPU_STRLEN
@@ -310,9 +319,16 @@ InstanceHandle createInstance(const InstanceDescriptor& descriptor) {
 	return wgpuCreateInstance(reinterpret_cast<const WGPUInstanceDescriptor*>(&descriptor));
 }
 
-#ifdef WEBGPU_CPP_USE_RAW_NAMESPACE
-namespace raw {
+}
+
+#ifdef WEBGPU_CPP_NAMESPACE
+namespace WEBGPU_CPP_NAMESPACE
 #endif
+{
+#ifdef WEBGPU_CPP_USE_RAW_NAMESPACE
+namespace raw 
+#endif
+{
 Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
 	struct Context {
 		Adapter adapter = nullptr;
@@ -390,9 +406,8 @@ Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 	assert(context.requestEnded);
 	return context.device;
 }
-#ifdef WEBGPU_CPP_USE_RAW_NAMESPACE
 }
-#endif
+}
 
 #undef HANDLE
 #undef STRUCT
@@ -402,5 +417,3 @@ Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 #undef ENUM
 #undef ENUM_ENTRY
 #undef END
-
-} // namespace wgpu

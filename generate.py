@@ -105,6 +105,10 @@ def makeArgParser():
 
     parser.add_argument("--use-raw-namespace", action='store_true', dest="use_raw_namespace",
                         help="Put non-RAII handle types into the nested namespace 'raw' (wgpu::raw) and make structs/descriptors use them.")
+    
+    parser.add_argument("--namespace", type=str,
+                        default="wgpu",
+                        help="Namespace to use for the generated binding.")
 
     return parser
 
@@ -628,9 +632,9 @@ def produceBinding(args, api, meta, template):
             # Also produce a RAII alias entry using HANDLE_RAII; second parameter points to underlying handle type
             # Produce a RAII alias in the wgpu namespace that wraps the underlying (possibly raw) handle.
             if args.use_raw_namespace:
-                binding["handle_raii"].append(f"using {entry_name} = wgpu::RaiiHandle<wgpu::raw::{entry_name}>;")
+                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, raw::{entry_name});")
             else:
-                binding["handle_raii"].append(f"using {entry_name} = wgpu::RaiiHandle<wgpu::{entry_name}>;")
+                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, {entry_name});")
 
         if entry_name.startswith("INTERNAL__"):
             continue
@@ -787,37 +791,41 @@ def produceBinding(args, api, meta, template):
                         f"}}\n"
                     )
                     
-                    # 2. Vector
-                    vec_type = f"std::vector<{cpp_base_type}>"
-                    vec_arg = f"const {vec_type}&" if is_const else f"{vec_type}&"
-                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({vec_arg} {prop.name});\n")
-                    implems.append(
-                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({vec_arg} {prop.name}) {{\n"
-                        f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
-                        f"\tthis->{prop.name} = reinterpret_cast<{field_type}>({prop.name}.data());\n"
-                        f"\treturn *this;\n"
-                        f"}}\n"
-                    )
+                    # 2\3. Vector & Span
+                    types = [cpp_base_type, cpp_base_type.split("raw::",1)[1]] if args.use_raw_namespace and cpp_base_type.startswith("raw::") else [cpp_base_type]
+                    for cpp_base_type in types:
+                        
+                        # 2. Vector
+                        vec_type = f"std::vector<{cpp_base_type}>"
+                        vec_arg = f"const {vec_type}&" if is_const else f"{vec_type}&"
+                        decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({vec_arg} {prop.name});\n")
+                        implems.append(
+                            f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({vec_arg} {prop.name}) {{\n"
+                            f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
+                            f"\tthis->{prop.name} = reinterpret_cast<{field_type}>({prop.name}.data());\n"
+                            f"\treturn *this;\n"
+                            f"}}\n"
+                        )
 
-                    # 3. Span
-                    span_t = f"const {cpp_base_type}" if is_const else cpp_base_type
-                    span_type = f"std::span<{span_t}>"
-                    decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
-                    
-                    # If field_type is same as span's data type, no cast. 
-                    # field_type: const FeatureName*. Span data: const FeatureName*.
-                    
-                    data_access = f"{prop.name}.data()"
-                    if field_type != f"{span_t}*": # e.g. field is void*, or diff type
-                         data_access = f"reinterpret_cast<{field_type}>({prop.name}.data())"
+                        # 3. Span
+                        span_t = f"const {cpp_base_type}" if is_const else cpp_base_type
+                        span_type = f"std::span<{span_t}>"
+                        decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
 
-                    implems.append(
-                        f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
-                        f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
-                        f"\tthis->{prop.name} = {data_access};\n"
-                        f"\treturn *this;\n"
-                        f"}}\n"
-                    )
+                        # If field_type is same as span's data type, no cast. 
+                        # field_type: const FeatureName*. Span data: const FeatureName*.
+
+                        data_access = f"{prop.name}.data()"
+                        if field_type != f"{span_t}*": # e.g. field is void*, or diff type
+                             data_access = f"reinterpret_cast<{field_type}>({prop.name}.data())"
+
+                        implems.append(
+                            f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
+                            f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
+                            f"\tthis->{prop.name} = {data_access};\n"
+                            f"\treturn *this;\n"
+                            f"}}\n"
+                        )
                 
                 else:
                     # Generic Setter
@@ -975,6 +983,25 @@ def produceBinding(args, api, meta, template):
                                 [f"1", f"reinterpret_cast<const {vec_type} *>(&{vec_name})"]
                             ),
                         ]
+
+                        # If raw namespace is used and this element is a handle, also provide overloads
+                        # that accept RAII handle types in the wgpu:: namespace (e.g. std::vector<BindGroup>)
+                        if args.use_raw_namespace and cpp_type in handle_names:
+                            raii = f"{args.namespace}::" + cpp_type
+                            alternatives += [
+                                (
+                                    [f"const std::vector<{raii}>& {vec_name}"],
+                                    [f"static_cast<{a.type}>({vec_name}.size())", f"reinterpret_cast<const {vec_type} *>({vec_name}.data())"]
+                                ),
+                                (
+                                    [f"const std::span<const {raii}>& {vec_name}"],
+                                    [f"static_cast<{a.type}>({vec_name}.size())", f"reinterpret_cast<const {vec_type} *>({vec_name}.data())"]
+                                ),
+                                (
+                                    [f"const {raii}& {vec_name}"],
+                                    [f"1", f"reinterpret_cast<const {vec_type} *>(&{vec_name})"]
+                                ),
+                            ]
 
                         for new_args, new_arg_names in alternatives:
                             alt_arguments = arguments[:i-1] + new_args + arguments[i+2:]
@@ -1179,11 +1206,17 @@ inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return s
         if binding.get("handles"):
             binding["handles"] = "namespace raw {\n" + binding["handles"] + "\n}\n"
         if binding.get("handles_decl"):
-            binding["handles_decl"] = "namespace raw {\n" + binding["handles_decl"] + "\n}\n"
+            binding["handles_decl"] += "\nnamespace raw {\n" + binding["handles_decl"] + "\n}\n"
         if binding.get("handles_impl"):
             binding["handles_impl"] = "namespace raw {\n" + binding["handles_impl"] + "\n}\n"
         if binding.get("handle_template_impl"):
             binding["handle_template_impl"] = "namespace raw {\n" + binding["handle_template_impl"] + "\n}\n"
+    
+    if args.namespace != "":
+        for k, v in binding.items():
+            if k == "c_exports" or k == "webgpu_includes" or k == "ext_suffix":
+                continue
+            binding[k] = f"namespace {args.namespace} {{\n" + v + f"\n}} // namespace {args.namespace}\n"
 
     return binding
 
@@ -1281,11 +1314,16 @@ def downloadHeader(url):
 
 def generateOutput(args, template, fields):
     logging.info(f"Writing generated binding to {args.output}...")
+    fields["webgpu_includes"] += "\n"
     if args.use_raw_namespace:
-        fields["webgpu_includes"] = fields["webgpu_includes"] + "\n\n#define WEBGPU_CPP_USE_RAW_NAMESPACE\n"
+        fields["webgpu_includes"] = fields["webgpu_includes"] + "\n#define WEBGPU_CPP_USE_RAW_NAMESPACE\n"
+    if args.namespace != "":
+        fields["webgpu_includes"] = fields["webgpu_includes"] + "\n#define WEBGPU_CPP_NAMESPACE " + args.namespace + "\n"
     out = template.format(**fields)
     if args.use_raw_namespace:
         out += "\n#undef WEBGPU_CPP_USE_RAW_NAMESPACE\n"
+    if args.namespace != "":
+        out += "\n#undef WEBGPU_CPP_NAMESPACE\n"
     with openVfs(args.output, 'w', encoding="utf-8") as f:
         f.write(out)
 
