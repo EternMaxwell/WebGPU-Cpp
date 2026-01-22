@@ -662,7 +662,7 @@ def produceBinding(args, api, meta, template):
                 if entry_name in api.stypes:
                     default_val = api.stypes[entry_name]
                     if args.use_scoped_enums and default_val.startswith("(WGPUSType)"):
-                        default_val = f"static_cast<SType>(static_cast<uint32_t>({default_val[11:]}))"
+                        default_val = f"static_cast<SType>({default_val[11:]})"
 
                     prop_defaults.extend([
                         f"\tchain.sType = {default_val};\n",
@@ -1060,22 +1060,20 @@ def produceBinding(args, api, meta, template):
             else:
                 # True enum class
                 enum_text = (
-                    f"enum class {enum.name}: uint32_t {{\n"
+                    f"enum class {enum.name}: int {{\n"
                     + "".join([ f"\t{formatEnumValue(e.key)} = {e.value},\n" for e in enum.entries ])
                     + "};\n"
                 )
                 
                 # Operators
                 enum_text += f"""
-inline constexpr bool operator==({enum.name} a, WGPU{enum.name} b) {{ return static_cast<uint32_t>(a) == static_cast<uint32_t>(b); }}
-inline constexpr bool operator==(WGPU{enum.name} a, {enum.name} b) {{ return static_cast<uint32_t>(a) == static_cast<uint32_t>(b); }}
+inline constexpr bool operator==({enum.name} a, WGPU{enum.name} b) {{ return static_cast<int>(a) == static_cast<int>(b); }}
+inline constexpr bool operator==(WGPU{enum.name} a, {enum.name} b) {{ return static_cast<int>(a) == static_cast<int>(b); }}
 inline constexpr bool operator!=({enum.name} a, WGPU{enum.name} b) {{ return !(a == b); }}
 inline constexpr bool operator!=(WGPU{enum.name} a, {enum.name} b) {{ return !(a == b); }}
 
-inline constexpr {enum.name} operator|({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }}
-inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b)); }}
-inline constexpr {enum.name} operator^({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<uint32_t>(a) ^ static_cast<uint32_t>(b)); }}
-inline constexpr {enum.name} operator~({enum.name} a) {{ return static_cast<{enum.name}>(~static_cast<uint32_t>(a)); }}
+inline constexpr {enum.name} operator|({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<int>(a) | static_cast<int>(b)); }}
+inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return static_cast<{enum.name}>(static_cast<int>(a) & static_cast<int>(b)); }}
 """
                 
         else:
