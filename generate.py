@@ -103,6 +103,9 @@ def makeArgParser():
     parser.add_argument("--use-inline", action='store_true', dest="use_inline",
                         help="Make all methods inlined (seems to have an effect with clang, but MSVC fails at linking in that case).")
 
+    parser.add_argument("--use-raw-namespace", action='store_true', dest="use_raw_namespace",
+                        help="Put non-RAII handle types into the nested namespace 'raw' (wgpu::raw) and make structs/descriptors use them.")
+
     return parser
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -122,7 +125,7 @@ def main(args):
 
     binding = produceBinding(args, api, meta, template)
     
-    generateOutput(args.output, template, binding)
+    generateOutput(args, template, binding)
 
 def applyDefaultArgs(args):
     if not args.use_init_macros or args.defaults != []:
@@ -469,7 +472,9 @@ def produceBinding(args, api, meta, template):
         "c_exports": [],
         "to_string_decl": [],
         "to_string_impl": [],
-        "template_impl": [],
+        "handle_template_impl": [],
+        "class_template_impl": [],
+        "handle_raii": [],
         "ext_suffix": args.ext_suffix,
     }
 
@@ -568,6 +573,9 @@ def produceBinding(args, api, meta, template):
         if arg_type.startswith("WGPU"):
             arg_type = arg_type[len("WGPU"):]
 
+        # keep the base name for matching (used to decide raw:: prefix)
+        base_arg_type = arg_type
+
         if arg_type in callbacks:
             arg_type = f"{arg_type}&&"
             arg_c = "cCallback"
@@ -584,7 +592,12 @@ def produceBinding(args, api, meta, template):
             elif arg_type in enum_ptr_names:
                 arg_c = f"reinterpret_cast<WGPU{arg_type}>({arg_c})"
 
-        sig_cpp = f"{arg_type} {arg.name}"
+        # If user wants non-RAII handles under wgpu::raw, present signature types accordingly
+        final_arg_type = base_arg_type
+        if args.use_raw_namespace and base_arg_type in handle_names:
+            final_arg_type = f"raw::{base_arg_type}"
+
+        sig_cpp = f"{final_arg_type} {arg.name}"
 
         return sig_cpp, arg_c, arg_cpp, skip_next
 
@@ -612,6 +625,12 @@ def produceBinding(args, api, meta, template):
             namespace_oneliner = "handles_oneliner"
             argument_self = "m_raw"
             use_const = args.use_const
+            # Also produce a RAII alias entry using HANDLE_RAII; second parameter points to underlying handle type
+            # Produce a RAII alias in the wgpu namespace that wraps the underlying (possibly raw) handle.
+            if args.use_raw_namespace:
+                binding["handle_raii"].append(f"using {entry_name} = wgpu::RaiiHandle<wgpu::raw::{entry_name}>;")
+            else:
+                binding["handle_raii"].append(f"using {entry_name} = wgpu::RaiiHandle<wgpu::{entry_name}>;")
 
         if entry_name.startswith("INTERNAL__"):
             continue
@@ -637,8 +656,14 @@ def produceBinding(args, api, meta, template):
                 cpp_base_type = base_type
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
-                    if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
+                    if candidate in enum_names or ("WGPU" + candidate) in class_names:
                         cpp_base_type = candidate
+                    elif candidate in handle_names:
+                        # Use raw namespace handle for fields if requested
+                        if args.use_raw_namespace:
+                            cpp_base_type = f"raw::{candidate}"
+                        else:
+                            cpp_base_type = candidate
                 elif base_type == "WGPUBool":
                      cpp_base_type = "Bool"
 
@@ -699,7 +724,10 @@ def produceBinding(args, api, meta, template):
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
                     if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
-                        cpp_base_type = candidate
+                        if args.use_raw_namespace and candidate in handle_names:
+                            cpp_base_type = f"raw::{candidate}"
+                        else:
+                            cpp_base_type = candidate
                 elif base_type == "WGPUBool":
                     cpp_base_type = "bool"
 
@@ -731,7 +759,10 @@ def produceBinding(args, api, meta, template):
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
                     if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
-                        field_base_type = candidate
+                        if args.use_raw_namespace and candidate in handle_names:
+                            field_base_type = f"raw::{candidate}"
+                        else:
+                            field_base_type = candidate
                 elif base_type == "WGPUBool":
                      field_base_type = "Bool" # Field is uint32_t/Bool
                 
@@ -881,6 +912,9 @@ def produceBinding(args, api, meta, template):
 
             if return_type.startswith("WGPU"):
                 return_type = return_type[4:]
+            # If returning a handle and raw namespace is requested, present raw::Type
+            if args.use_raw_namespace and return_type in handle_names:
+                return_type = f"raw::{return_type}"
             if args.use_scoped_enums:
                 if return_type in enum_names:
                     begin_cast = f"static_cast<{return_type}>("
@@ -1007,18 +1041,18 @@ def produceBinding(args, api, meta, template):
         )
 
         if len(template_implems) > 0:
-            binding["template_impl"].append(
-                f"// Template methods of {entry_name}\n"
-                + "".join(template_implems)
-                + "\n"
-            )
-
-    # Only handles_impl is present in the tamplate
-    binding["handles_impl"] = (
-        binding["defaults_impl"] +
-        binding["class_impl"] +
-        binding["handles_impl"]
-    )
+            if entry_type == 'HANDLE':
+                binding["handle_template_impl"].append(
+                    f"// Template methods of {entry_name}\n"
+                    + "".join(template_implems)
+                    + "\n"
+                )
+            elif entry_type == 'CLASS':
+                binding["class_template_impl"].append(
+                    f"// Template methods of {entry_name}\n"
+                    + "".join(template_implems)
+                    + "\n"
+                )
 
     if args.use_non_member_procedures:
         for proc in api.procedures:
@@ -1042,6 +1076,8 @@ def produceBinding(args, api, meta, template):
             # Just strip WGPU prefix for signature
             ret_sig = ret_type
             if ret_sig.startswith("WGPU"): ret_sig = ret_sig[4:]
+            if args.use_raw_namespace and ret_sig in handle_names:
+                ret_sig = f"raw::{ret_sig}"
             
             binding["procedures"].append(
                 f"{ret_sig} {proc_name}({', '.join(arguments)}) {{\n"
@@ -1138,6 +1174,17 @@ inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return s
     for k, v in binding.items():
         binding[k] = "\n".join(v)
 
+    # If raw namespace requested, wrap the non-RAII handle definitions in namespace raw
+    if args.use_raw_namespace:
+        if binding.get("handles"):
+            binding["handles"] = "namespace raw {\n" + binding["handles"] + "\n}\n"
+        if binding.get("handles_decl"):
+            binding["handles_decl"] = "namespace raw {\n" + binding["handles_decl"] + "\n}\n"
+        if binding.get("handles_impl"):
+            binding["handles_impl"] = "namespace raw {\n" + binding["handles_impl"] + "\n}\n"
+        if binding.get("handle_template_impl"):
+            binding["handle_template_impl"] = "namespace raw {\n" + binding["handle_template_impl"] + "\n}\n"
+
     return binding
 
 # -----------------------------------------------------------------------------
@@ -1232,10 +1279,14 @@ def downloadHeader(url):
         with openVfs(resolved, encoding="utf-8") as f:
             return f.read()
 
-def generateOutput(path, template, fields):
-    logging.info(f"Writing generated binding to {path}...")
+def generateOutput(args, template, fields):
+    logging.info(f"Writing generated binding to {args.output}...")
+    if args.use_raw_namespace:
+        fields["webgpu_includes"] = fields["webgpu_includes"] + "\n\n#define WEBGPU_CPP_USE_RAW_NAMESPACE\n"
     out = template.format(**fields)
-    with openVfs(path, 'w', encoding="utf-8") as f:
+    if args.use_raw_namespace:
+        out += "\n#undef WEBGPU_CPP_USE_RAW_NAMESPACE\n"
+    with openVfs(args.output, 'w', encoding="utf-8") as f:
         f.write(out)
 
 def resolveFilepath(path):

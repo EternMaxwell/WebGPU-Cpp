@@ -205,7 +205,8 @@ wgpuDeviceGetLostFuture
 {{procedures}}
 
 // Template methods
-{{template_impl}}
+{{handle_template_impl}}
+{{class_template_impl}}
 
 Instance createInstance();
 Instance createInstance(const InstanceDescriptor& descriptor);
@@ -221,6 +222,8 @@ Instance createInstance(const InstanceDescriptor& descriptor) {
 }
 
 // Handles members implementation
+{{defaults_impl}}
+{{class_impl}}
 {{handles_impl}}
 {{to_string_impl}}
 
