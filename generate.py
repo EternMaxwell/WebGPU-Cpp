@@ -1086,6 +1086,25 @@ def produceBinding(args, api, meta, template):
                         + "}\n"
                     )
 
+        # Check if AddRef exists to generate clone()
+        has_add_ref = False
+        add_ref_name = "addRef"
+        for proc in api.procedures:
+            if proc.parent == entry_name and proc.name in ["AddRef", "Reference"]:
+                has_add_ref = True
+                add_ref_name = proc.name[0].lower() + proc.name[1:]
+                break
+
+        if has_add_ref:
+            raii_type = get_cpp_name(entry_name, force_raii=args.use_raw_namespace)
+            decls.append(f"\t{maybe_inline}{raii_type} clone() const;\n")
+            implems.append(
+                f"{maybe_inline}{raii_type} {entry_name}::clone() const {{\n"
+                f"\tthis->{add_ref_name}();\n"
+                f"\treturn {raii_type}(m_raw);\n"
+                f"}}\n"
+            )
+
         injected_decls = meta["injected-decls"].members.get(entry_name, [])
         macro = meta["injected-decls"].macro_override.get(entry_name, macro)
 
