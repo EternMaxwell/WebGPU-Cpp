@@ -215,9 +215,15 @@ public: \
 
 {{begin-inject}}
 HANDLE(Instance)
+#ifdef WEBGPU_CPP_NAMESPACE
+WEBGPU_CPP_NAMESPACE::
+#endif
 	Adapter requestAdapter(const RequestAdapterOptions& options);
 END
 HANDLE(Adapter)
+#ifdef WEBGPU_CPP_NAMESPACE
+WEBGPU_CPP_NAMESPACE::
+#endif
 	Device requestDevice(const DeviceDescriptor& descriptor);
 END
 STRUCT(Color)
@@ -326,6 +332,9 @@ namespace WEBGPU_CPP_NAMESPACE
 namespace raw 
 #endif
 {
+#ifdef WEBGPU_CPP_NAMESPACE
+WEBGPU_CPP_NAMESPACE::
+#endif
 Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
 	struct Context {
 		Adapter adapter = nullptr;
@@ -364,7 +373,9 @@ Adapter Instance::requestAdapter(const RequestAdapterOptions& options) {
 	assert(context.requestEnded);
 	return context.adapter;
 }
-
+#ifdef WEBGPU_CPP_NAMESPACE
+WEBGPU_CPP_NAMESPACE::
+#endif
 Device Adapter::requestDevice(const DeviceDescriptor& descriptor) {
 	struct Context {
 		Device device = nullptr;
