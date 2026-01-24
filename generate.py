@@ -291,6 +291,9 @@ def parseHeader(api, header):
             if return_type.startswith("WGPU_EXPORT"):
                 return_type = return_type[len("WGPU_EXPORT"):]
             return_type = return_type.strip()
+            if return_type.startswith("WGPU_NULLABLE"):
+                return_type = return_type[len("WGPU_NULLABLE"):]
+            return_type = return_type.strip()
             api.procedures.append(ProcedureApi(
                 name=match.group(2),
                 return_type=return_type,
@@ -514,11 +517,45 @@ def produceBinding(args, api, meta, template):
     enum_names = [ e.name for e in api.enumerations ]
     enum_ptr_names = [ f"{e.name} *" for e in api.enumerations ]
     simple_class_names = { d.name for d in api.classes }
+    
+    # Identify structs that are returned by value or passed as mutable pointer
+    owned_structs = set()
+    for proc in api.procedures:
+        # Check return type
+        ret = proc.return_type
+        if ret.startswith("WGPU_EXPORT"): ret = ret[11:].strip()
+        if ret.startswith("WGPU"): ret = ret[4:]
+        if ret in simple_class_names:
+            owned_structs.add(ret)
+        
+        # Check arguments
+        for arg in proc.arguments:
+            t = arg.type
+            if t.endswith("const *"): continue
+            if "*" in t:
+                # Mutable pointer
+                clean = t.replace("*", "").strip()
+                if clean.startswith("struct WGPU"): clean = clean[11:] # Handle "struct WGPU..."
+                elif clean.startswith("WGPU"): clean = clean[4:]
+                if clean in simple_class_names:
+                    owned_structs.add(clean)
+
     callbacks = {
         f"{cb.name}Callback": cb
         for cb in api.callbacks
     }
-    def format_arg(arg):
+
+    def get_cpp_name(base_name, force_raii=False):
+        ns = args.namespace + "::" if args.namespace else ""
+        if base_name in handle_names:
+            if args.use_raw_namespace and not force_raii:
+                 return f"{ns}raw::{base_name}"
+            return f"{ns}{base_name}"
+        if base_name in simple_class_names or base_name in enum_names:
+             return f"{ns}{base_name}"
+        return base_name
+
+    def format_arg(arg, force_raii_return=False):
         """
         Given a function argument, return it (i) as an argument *received* from
         the C++ API and (ii) as an argument *passed* to the C API and (iii) as
@@ -543,7 +580,7 @@ def produceBinding(args, api, meta, template):
             
         if base_candidates in simple_class_names:
             # It is a wrapped class (Descriptor or Struct)
-            cpp_base = base_candidates
+            cpp_base = get_cpp_name(base_candidates)
             c_base = "WGPU" + base_candidates
             
             # Determine C++ signature type: default to pointers to avoid nullability issues and simplify casting
@@ -565,7 +602,7 @@ def produceBinding(args, api, meta, template):
                  # Value argument (e.g. StringView): Cast address and dereference
                  cast_type_ptr = c_cast + " *"
                  arg_c = f"*reinterpret_cast<{cast_type_ptr}>(&{arg.name})"
-                 
+
                  cpp_sig_ptr = cpp_sig + " *"
                  arg_cpp = f"*reinterpret_cast<{cpp_sig_ptr}>(&{arg.name})"
             
@@ -592,14 +629,18 @@ def produceBinding(args, api, meta, template):
         if args.use_scoped_enums:
             if arg_type in enum_names:
                 arg_c = f"static_cast<WGPU{arg_type}>({arg_c})"
-                arg_cpp = f"static_cast<{arg_type}>({arg_cpp})"
+                arg_cpp = f"static_cast<{get_cpp_name(arg_type)}>({arg_cpp})"
             elif arg_type in enum_ptr_names:
                 arg_c = f"reinterpret_cast<WGPU{arg_type}>({arg_c})"
 
         # If user wants non-RAII handles under wgpu::raw, present signature types accordingly
         final_arg_type = base_arg_type
-        if args.use_raw_namespace and base_arg_type in handle_names:
-            final_arg_type = f"raw::{base_arg_type}"
+        if base_arg_type in handle_names:
+             is_out_param = "*" in arg.type and "const" not in arg.type and base_arg_type in handle_names
+             is_raii = is_out_param or force_raii_return
+             final_arg_type = get_cpp_name(base_arg_type, force_raii=is_raii)
+        elif base_arg_type in enum_names:
+             final_arg_type = get_cpp_name(base_arg_type)
 
         sig_cpp = f"{final_arg_type} {arg.name}"
 
@@ -632,9 +673,9 @@ def produceBinding(args, api, meta, template):
             # Also produce a RAII alias entry using HANDLE_RAII; second parameter points to underlying handle type
             # Produce a RAII alias in the wgpu namespace that wraps the underlying (possibly raw) handle.
             if args.use_raw_namespace:
-                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, raw::{entry_name});")
+                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, raw::{entry_name})\nEND")
             else:
-                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, {entry_name});")
+                binding["handle_raii"].append(f"HANDLE_RAII({entry_name}, {entry_name})\nEND")
 
         if entry_name.startswith("INTERNAL__"):
             continue
@@ -657,17 +698,16 @@ def produceBinding(args, api, meta, template):
                 is_const = "const" in c_type
                 base_type = c_type.replace("const", "").replace("*", "").replace("WGPU_NULLABLE", "").strip()
                 
+                force_raii_field = (entry_name in owned_structs)
+
                 cpp_base_type = base_type
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
                     if candidate in enum_names or ("WGPU" + candidate) in class_names:
-                        cpp_base_type = candidate
+                        cpp_base_type = get_cpp_name(candidate)
                     elif candidate in handle_names:
-                        # Use raw namespace handle for fields if requested
-                        if args.use_raw_namespace:
-                            cpp_base_type = f"raw::{candidate}"
-                        else:
-                            cpp_base_type = candidate
+                        # Use raw namespace handle for fields if requested, unless forced RAII
+                        cpp_base_type = get_cpp_name(candidate, force_raii=force_raii_field)
                 elif base_type == "WGPUBool":
                      cpp_base_type = "Bool"
 
@@ -691,7 +731,7 @@ def produceBinding(args, api, meta, template):
                 if entry_name in api.stypes:
                     default_val = api.stypes[entry_name]
                     if args.use_scoped_enums and default_val.startswith("(WGPUSType)"):
-                        default_val = f"static_cast<SType>({default_val[11:]})"
+                        default_val = f"static_cast<{get_cpp_name('SType')}>({default_val[11:]})"
 
                     prop_defaults.extend([
                         f"\tchain.sType = {default_val};\n",
@@ -728,10 +768,11 @@ def produceBinding(args, api, meta, template):
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
                     if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
-                        if args.use_raw_namespace and candidate in handle_names:
-                            cpp_base_type = f"raw::{candidate}"
+                        if candidate in handle_names:
+                             force_raii_field = (entry_name in owned_structs)
+                             cpp_base_type = get_cpp_name(candidate, force_raii=force_raii_field)
                         else:
-                            cpp_base_type = candidate
+                             cpp_base_type = get_cpp_name(candidate)
                 elif base_type == "WGPUBool":
                     cpp_base_type = "bool"
 
@@ -750,9 +791,6 @@ def produceBinding(args, api, meta, template):
                          trans_expr = f"static_cast<WGPUBool>({arg_name} ? 1 : 0)"
                     # Case 2: Enum arg -> Enum/int field (via cast)
                     elif cpp_base_type in enum_names:
-                        # WGPUEnum is C enum, Enum is C++ wrapper. 
-                        # Field is C++ wrapper Enum.
-                        # Arg is C++ wrapper Enum.
                         # No cast needed if field is C++ type.
                         trans_expr = arg_name
                         pass
@@ -763,10 +801,11 @@ def produceBinding(args, api, meta, template):
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
                     if candidate in enum_names or candidate in handle_names or ("WGPU" + candidate) in class_names:
-                        if args.use_raw_namespace and candidate in handle_names:
-                            field_base_type = f"raw::{candidate}"
+                        if candidate in handle_names:
+                             force_raii_field = (entry_name in owned_structs)
+                             field_base_type = get_cpp_name(candidate, force_raii=force_raii_field)
                         else:
-                            field_base_type = candidate
+                             field_base_type = get_cpp_name(candidate)
                 elif base_type == "WGPUBool":
                      field_base_type = "Bool" # Field is uint32_t/Bool
                 
@@ -792,33 +831,36 @@ def produceBinding(args, api, meta, template):
                     )
                     
                     # 2\3. Vector & Span
-                    types = [cpp_base_type, cpp_base_type.split("raw::",1)[1]] if args.use_raw_namespace and cpp_base_type.startswith("raw::") else [cpp_base_type]
-                    for cpp_base_type in types:
+                    types = [cpp_base_type]
+                    # If this is a handle and we act as raw, also allow RAII input (which casts to raw)
+                    raw_ns_sub = "raw::"
+                    if args.use_raw_namespace and raw_ns_sub in cpp_base_type:
+                        # Extract base handle name
+                        # wgpu::raw::Buffer -> Buffer
+                        parts = cpp_base_type.split("raw::")
+                        if len(parts) > 1:
+                            types.append(parts[0] + parts[1]) # wgpu:: + Buffer -> wgpu::Buffer
+
+                    for loop_type in types:
+
+                        data_access = f"reinterpret_cast<{field_type}>({prop.name}.data())"
                         
                         # 2. Vector
-                        vec_type = f"std::vector<{cpp_base_type}>"
+                        vec_type = f"std::vector<{loop_type}>"
                         vec_arg = f"const {vec_type}&" if is_const else f"{vec_type}&"
                         decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}({vec_arg} {prop.name});\n")
                         implems.append(
                             f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}({vec_arg} {prop.name}) {{\n"
                             f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
-                            f"\tthis->{prop.name} = reinterpret_cast<{field_type}>({prop.name}.data());\n"
+                            f"\tthis->{prop.name} = {data_access};\n"
                             f"\treturn *this;\n"
                             f"}}\n"
                         )
 
                         # 3. Span
-                        span_t = f"const {cpp_base_type}" if is_const else cpp_base_type
+                        span_t = f"const {loop_type}" if is_const else loop_type
                         span_type = f"std::span<{span_t}>"
                         decls.append(f"\t{maybe_inline}{entry_name}& {setter_name}(const {span_type}& {prop.name});\n")
-
-                        # If field_type is same as span's data type, no cast. 
-                        # field_type: const FeatureName*. Span data: const FeatureName*.
-
-                        data_access = f"{prop.name}.data()"
-                        if field_type != f"{span_t}*": # e.g. field is void*, or diff type
-                             data_access = f"reinterpret_cast<{field_type}>({prop.name}.data())"
-
                         implems.append(
                             f"{maybe_inline}{entry_name}& {entry_name}::{setter_name}(const {span_type}& {prop.name}) {{\n"
                             f"\tthis->{prop.counter} = static_cast<{counter_type}>({prop.name}.size());\n"
@@ -864,16 +906,16 @@ def produceBinding(args, api, meta, template):
                 cb_name = proc.arguments[-2].name
                 cb_arg_names = map(lambda a: format_arg(a)[2], cb.arguments[:-1])
                 body = (
-                      f"\tauto handle = std::make_unique<{cb.name}Callback>({cb_name});\n"
+                      f"\tauto handle = std::make_unique<{get_cpp_name(cb.name)}Callback>({cb_name});\n"
                     + f"\tstatic auto cCallback = []({cb.raw_arguments}) -> void {{\n"
-                    + f"\t\t{cb.name}Callback& callback = *reinterpret_cast<{cb.name}Callback*>(userdata);\n"
+                    + f"\t\t{get_cpp_name(cb.name)}Callback& callback = *reinterpret_cast<{get_cpp_name(cb.name)}Callback*>(userdata);\n"
                     + f"\t\tcallback({', '.join(cb_arg_names)});\n"
                     + "\t};\n"
                     + "\t{wrapped_call};\n"
                     + "\treturn handle;\n"
                 )
                 argument_names.append(f"reinterpret_cast<void*>(handle.get())")
-                return_type = f"std::unique_ptr<{cb.name}Callback>"
+                return_type = f"std::unique_ptr<{get_cpp_name(cb.name)}Callback>"
                 maybe_no_discard = "NO_DISCARD "
             elif proc.arguments[-1].type.endswith("CallbackInfo"): # NEW callback mechanism
                 cb_type = proc.arguments[-1].type[4:-len("Info")]
@@ -920,13 +962,16 @@ def produceBinding(args, api, meta, template):
 
             if return_type.startswith("WGPU"):
                 return_type = return_type[4:]
-            # If returning a handle and raw namespace is requested, present raw::Type
-            if args.use_raw_namespace and return_type in handle_names:
-                return_type = f"raw::{return_type}"
+            
+            # Use utility, force RAII for handles (return type always RAII if it's a handle)
+            return_type_cpp = get_cpp_name(return_type, force_raii=(return_type in handle_names))
+            
             if args.use_scoped_enums:
                 if return_type in enum_names:
-                    begin_cast = f"static_cast<{return_type}>("
+                    begin_cast = f"static_cast<{return_type_cpp}>("
                     end_cast = ")"
+            
+            return_type = return_type_cpp
             
             wrapped_call = f"{begin_cast}wgpu{entry_name}{proc.name}({argument_names_str}){end_cast}"
             maybe_const = " const" if use_const else ""
@@ -1103,14 +1148,27 @@ def produceBinding(args, api, meta, template):
             # Just strip WGPU prefix for signature
             ret_sig = ret_type
             if ret_sig.startswith("WGPU"): ret_sig = ret_sig[4:]
-            if args.use_raw_namespace and ret_sig in handle_names:
-                ret_sig = f"raw::{ret_sig}"
+            ret_sig = get_cpp_name(ret_sig, force_raii=(ret_sig in handle_names))
             
             binding["procedures"].append(
                 f"{ret_sig} {proc_name}({', '.join(arguments)}) {{\n"
                 + f"\treturn wgpu{proc.name}({', '.join(argument_names)});\n"
                 + "}"
             )
+            
+            # Add a variant when the last argument is a nullable descriptor
+            if len(proc.arguments) > 0:
+                arg = proc.arguments[-1]
+                _, arg_c, __, ___ = format_arg(arg)
+                if arg.nullable and arg_c.startswith("&"):
+                    alt_arguments = arguments[:-1]
+                    alt_argument_names = argument_names[:-1] + ["nullptr"]
+                    
+                    binding["procedures"].append(
+                        f"{ret_sig} {proc_name}({', '.join(alt_arguments)}) {{\n"
+                        + f"\treturn wgpu{proc.name}({', '.join(alt_argument_names)});\n"
+                        + "}"
+                    )
 
     for enum in api.enumerations:
         if args.use_scoped_enums:
@@ -1197,6 +1255,29 @@ inline constexpr {enum.name} operator&({enum.name} a, {enum.name} b) {{ return s
 
     for ta in api.type_aliases:
         binding["c_exports"].append(f"export using ::WGPU{ta.wgpu_type};")
+
+    # Add FRIENDS macro for RAII handles
+    raii_friends = []
+    if args.use_raw_namespace:
+        ns_prefix = f"{args.namespace}::" if args.namespace else ""
+        for h in api.handles:
+           raii_friends.append(f"friend class {ns_prefix}raw::{h.name};")
+        
+        for s in owned_structs:
+             raii_friends.append(f"friend struct {ns_prefix}{s};")
+
+        raii_friends.append(f"friend {ns_prefix}Instance createInstance(const {ns_prefix}InstanceDescriptor&);")
+        raii_friends.append(f"friend {ns_prefix}Instance createInstance();")
+        
+        if args.use_non_member_procedures:
+            for proc in binding["procedures"]:
+                proc_decl = proc.split('{')[0].strip().rstrip(';')
+                raii_friends.append(f"friend {proc_decl};")
+
+        macro = "#define WEBGPU_RAII_FRIENDS \\\n\t" + " \\\n\t".join(raii_friends)
+        binding["webgpu_includes"].append(macro)
+    else:
+        binding["webgpu_includes"].append("#define WEBGPU_RAII_FRIENDS")
 
     for k, v in binding.items():
         binding[k] = "\n".join(v)

@@ -105,9 +105,12 @@ public:
 class Type : public Template { \
 public: \
 	typedef Template H; \
+	WEBGPU_RAII_FRIENDS \
 	Type() : H() {} \
+private: \
 	Type(const typename H::W& w) : H(w) {} \
 	Type(const H& handle) : H(handle) {} \
+public: \
 	Type& operator=(const H& handle) { \
 		H& h = *this; \
 		if (h) h.release(); \
@@ -157,8 +160,7 @@ public: \
 	bool operator==(const Type& other) const { return (H&)(*this) == (H&)(other); } \
 	bool operator!=(const Type& other) const { return (H&)(*this) != (H&)(other); } \
 	bool operator==(const typename H::W& other) const { return (H&)(*this) == other; } \
-	bool operator!=(const typename H::W& other) const { return (H&)(*this) != other; } \
-};
+	bool operator!=(const typename H::W& other) const { return (H&)(*this) != other; }
 
 #define DESCRIPTOR(Type) \
 struct Type { \
@@ -277,15 +279,8 @@ export {
 namespace WEBGPU_CPP_NAMESPACE
 #endif
 {
-using InstanceHandle = 
-#ifdef WEBGPU_CPP_USE_RAW_NAMESPACE
-raw::Instance;
-#else
-Instance;
-#endif
-
-InstanceHandle createInstance();
-InstanceHandle createInstance(const InstanceDescriptor& descriptor);
+Instance createInstance();
+Instance createInstance(const InstanceDescriptor& descriptor);
 }
 
 }
@@ -313,11 +308,11 @@ StringView::operator std::string_view() const {
 		: std::string_view(data, length);
 }
 
-InstanceHandle createInstance() {
+Instance createInstance() {
 	return wgpuCreateInstance(nullptr);
 }
 
-InstanceHandle createInstance(const InstanceDescriptor& descriptor) {
+Instance createInstance(const InstanceDescriptor& descriptor) {
 	return wgpuCreateInstance(reinterpret_cast<const WGPUInstanceDescriptor*>(&descriptor));
 }
 
