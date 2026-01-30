@@ -110,32 +110,21 @@ public: \
 private: \
 	Type(const typename H::W& w) : H(w) {} \
 	Type(const H& handle) : H(handle) {} \
-public: \
 	Type& operator=(const H& handle) { \
 		H& h = *this; \
 		if (h) h.release(); \
 		h = handle; \
 		return *this; \
 	} \
+public: \
 	Type& operator=(std::nullptr_t) { \
 		H& h = *this; \
 		if (h) h.release(); \
 		h = nullptr; \
 		return *this; \
 	} \
-	Type(const Type& other) { \
-		H& h = *this; \
-		if (h) h.release(); \
-		h = other; \
-		h.addRef(); \
-	} \
-	Type& operator=(const Type& other) { \
-		H& h = *this; \
-		if (h) h.release(); \
-		h = other; \
-		h.addRef(); \
-		return *this; \
-	} \
+	Type(const Type& other) = delete; \
+	Type& operator=(const Type& other) = delete; \
 	Type(Type&& other) noexcept { \
 		H& h = *this; \
 		if (h) h.release(); \

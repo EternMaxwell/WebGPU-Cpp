@@ -797,6 +797,7 @@ def produceBinding(args, api, meta, template):
 
                 # If field is C++ type, we might not need reinterpret_cast for assignment unless mismatched
                 # Re-eval cpp_base_type for FIELD (might differ from argument if argument used 'bool')
+                should_move = False
                 field_base_type = base_type
                 if base_type.startswith("WGPU"):
                     candidate = base_type[4:]
@@ -804,6 +805,7 @@ def produceBinding(args, api, meta, template):
                         if candidate in handle_names:
                              force_raii_field = (entry_name in owned_structs)
                              field_base_type = get_cpp_name(candidate, force_raii=force_raii_field)
+                             if force_raii_field: should_move = True
                         else:
                              field_base_type = get_cpp_name(candidate)
                 elif base_type == "WGPUBool":
@@ -814,6 +816,8 @@ def produceBinding(args, api, meta, template):
                 if is_ptr: field_type = field_type + " *"
 
                 # Internal assignment logic: this->prop = trans_expr;
+                if should_move:
+                    trans_expr = f"std::move({trans_expr})"
                 assignment = f"\tthis->{prop.name} = {trans_expr};\n"
                 
                 if prop.counter:
